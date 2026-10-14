@@ -153,21 +153,31 @@ class Backend:
             parts = line.split()
             if len(parts) >= 4:
                 leases[parts[1].lower()] = {"ip": parts[2], "name": None if parts[3] == "*" else parts[3]}
-        wifi = {}
-        out = ""
+        # WiFi 접속 기기: iw station dump (hostapd ctrl_interface 없이도 동작)
+        wifi, cur = {}, None
         try:
-            out = run(["hostapd_cli", "-i", WLAN_IF, "all_sta"], timeout=5, check=False)
+            out = run(["iw", "dev", WLAN_IF, "station", "dump"], timeout=5, check=False)
+        except Exception:  # noqa: BLE001
+            out = ""
+        for line in out.splitlines():
+            m = re.match(r"station ([0-9a-f:]{17})", line.strip().lower())
+            if m:
+                cur = m.group(1)
+                wifi[cur] = {}
+            elif cur and ":" in line:
+                k, _, v = line.strip().partition(":")
+                if k == "signal":
+                    wifi[cur]["signal"] = v.split()[0] if v.split() else None
+                elif k == "connected time":
+                    wifi[cur]["connected_time"] = v.split()[0] if v.split() else None
+        # 브리지 포트로 접속 경로 판별 (wlan0 = WiFi, usb* = USB)
+        port = {}
+        try:
+            for f in json.loads(run(["bridge", "-j", "fdb", "show", "br", LAN_BRIDGE], timeout=5) or "[]"):
+                if f.get("mac") and "permanent" not in (f.get("state") or "") and f.get("ifname"):
+                    port[f["mac"].lower()] = f["ifname"]
         except Exception:  # noqa: BLE001
             pass
-        cur = None
-        for line in out.splitlines():
-            if re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", line.strip().lower()):
-                cur = line.strip().lower()
-                wifi[cur] = {}
-            elif cur and "=" in line:
-                k, _, v = line.partition("=")
-                if k in ("connected_time", "signal"):
-                    wifi[cur][k] = v
         neigh = {}
         try:
             for n in json.loads(run(["ip", "-j", "neigh", "show", "dev", LAN_BRIDGE], timeout=5) or "[]"):
@@ -182,9 +192,11 @@ class Backend:
             online = w is not None or n.get("state") in ("REACHABLE", "DELAY", "PROBE", "STALE")
             if not online:
                 continue
+            dev = port.get(mac, "")
+            via = "WiFi" if (w is not None or dev == WLAN_IF) else "USB" if dev.startswith("usb") else "-"
             result.append({
                 "mac": mac, "ip": l.get("ip") or n.get("ip"), "name": l.get("name"),
-                "via": "WiFi" if w is not None else "USB",
+                "via": via,
                 "connected_sec": int(w["connected_time"]) if w and w.get("connected_time", "").isdigit() else None,
                 "signal_dbm": _num(w.get("signal")) if w else None,
             })
