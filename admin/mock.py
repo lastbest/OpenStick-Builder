@@ -1,6 +1,12 @@
 """모의 백엔드: 맥/PC에서 기기 없이 화면 개발용. 값은 실제 기기 측정치를 참고한 더미(IMEI 등 식별정보는 가짜)."""
+import os
 import random
+import struct
+import tempfile
 import time
+import zlib
+
+import sms
 
 _start = time.time()
 
@@ -12,6 +18,7 @@ class Backend:
         self.wan = {"data_enabled": True, "roaming_allowed": True, "apn_mode": "auto",
                     "apn": "", "username": "", "ip_type": "ipv4v6"}
         self.rx, self.tx = 512_000_000, 48_000_000
+        self.msgs = _MockMessages()
 
     def _bearer(self):
         if not self.wan["data_enabled"]:
@@ -35,6 +42,7 @@ class Backend:
                     "rx_bytes": self.rx, "tx_bytes": self.tx, "connected_sec": 3510,
                     "lan_down_bytes": self.rx, "lan_up_bytes": self.tx, "ts": time.time()},
             "clients": len(self.clients()["clients"]),
+            "unread": self.msgs.unread(),
             "system": {"uptime": int(time.time() - _start) + 3600, "load": ["0.12", "0.20", "0.18"],
                        "mem_total_kb": 382964, "mem_avail_kb": 256860, "temp_c": 41.5},
         }
@@ -93,3 +101,63 @@ class Backend:
 
     def reboot(self):
         return {"ok": True}
+
+    # 문자
+    def messages_list(self, q):
+        return self.msgs.list(q.get("limit", 50), q.get("before"))
+
+    def messages_send(self, d):
+        return self.msgs.send(d.get("number", ""), d.get("text", ""))
+
+    def messages_delete(self, d):
+        return self.msgs.delete(d.get("ids") or [])
+
+    def messages_read(self, d):
+        return self.msgs.mark_read(d.get("ids"))
+
+    def messages_retry(self, d):
+        return {"ok": True}
+
+    def messages_media(self, msg_id, part):
+        return self.msgs.media(msg_id, part)
+
+
+def _png(w=96, h=64):
+    rows = b"".join(b"\x00" + bytes(v for x in range(w) for v in (x * 255 // w, y * 255 // h, 180)) for y in range(h))
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+class _MockMessages(sms.Messages):
+    """실제 저장 로직 그대로, 모뎀만 가짜 (임시 폴더에 sqlite)."""
+
+    def __init__(self):
+        super().__init__(data_dir=tempfile.mkdtemp(prefix="osa-mock-"), start=False)
+        now = int(time.time())
+        self._add("in", "+821000000001", now - 3600, "sms", "수신테스트01", "received", 1)
+        self._add("in", "+821000000001", now - 3500,
+                  "sms", "한글테스트하나둘셋넷" * 6 + "총육십오줄", "received", 1)
+        mid = self._add("in", "+821000000001", now - 3400, "mms", "사진 보냅니다", "retrieved", 0, subject="[제목없음]")
+        with open(os.path.join(self.media_dir, f"{mid}-0"), "wb") as f:
+            f.write(_png())
+        self._set(mid, parts='[{"type": "image/png", "name": "IMG_0001.png", "file": "%d-0", "size": 1}]' % mid)
+        self._add("in", "+821000000002", now - 600, "mms", None, "error", 0, error="MMSC HTTP 연결 실패")
+        self._add("out", "+821000000001", now - 3300, "sms", "[OpenStick] 문자 수신 확인", "sent", 1)
+
+    def _add(self, direction, number, ts, kind, text, status, read, subject=None, error=None):
+        cur = self.db.execute(
+            "INSERT INTO messages(uid,direction,number,ts,kind,text,subject,status,read,error) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (os.urandom(8).hex(), direction, number, ts, kind, text, subject, status, read, error))
+        self.db.commit()
+        return cur.lastrowid
+
+    def send(self, number, text):
+        number = number.replace("-", "").replace(" ", "")
+        if not sms.NUMBER_RE.fullmatch(number):
+            raise ValueError("전화번호 형식 오류")
+        if not 1 <= len(text) <= 1000:
+            raise ValueError("내용은 1~1000자")
+        time.sleep(0.8)
+        return {"ok": True, "id": self._add("out", number, int(time.time()), "sms", text, "sent", 1)}

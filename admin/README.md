@@ -21,8 +21,25 @@ why it lives in this repository.
 | Internet | mobile data on/off, roaming, APN **auto/manual** (user/password/IP type) with **automatic rollback** if the new APN does not connect |
 | Clients | name / IP / MAC / WiFi or USB / signal / connected time |
 | Device | model, OS, kernel, IMEI, modem firmware, ICCID, IMSI; reboot |
+| Messages | SMS inbox/outbox, send and reply, **MMS** (long texts, pictures) downloaded automatically, unread badge, delete, retry |
 
 Roadmap: [`../docs/ADMIN_PAGE_PLAN.md`](../docs/ADMIN_PAGE_PLAN.md).
+
+## SMS / MMS (`sms.py`)
+- **EPS UE mode.** These modems come up as `ps-2` (data-only attach), in which the
+  network never delivers SMS. The collector switches to `csps-2` (data centric,
+  combined attach → SMS over SGs) on start and whenever it reverts (e.g. after reboot).
+- **Collector** (every 15 s): copies received SMS into `/var/lib/openstick-admin/messages.db`
+  (deduplicated — the network often delivers the same SMS twice) and deletes them from the
+  modem. Modem memory (`me`) is small and is wiped on reboot. Messages that piled up at the
+  carrier while the stick was off arrive in a burst and are handled the same way.
+- **MMS.** WAP-push notifications are parsed (OMA MMS / WSP) and the message is fetched with
+  a plain HTTP GET from its Content-Location over the normal data connection (tested on KT:
+  `d-mmsc.ktfwing.com:9083`, same APN as data). Text and images are stored; an
+  `m-notifyresp-ind` is posted to the MMSC (best effort). No mmsd-tng needed.
+  Korean carriers deliver long texts and pictures as MMS, so this matters there.
+- **Sending:** SMS only; ModemManager splits long texts into concatenated SMS.
+- Expired MMS (stick offline longer than the carrier keeps them) are shown as such.
 
 ## Install
 - **New images:** included by default (`WITH_ADMIN=0 ./build.sh` to leave it out).

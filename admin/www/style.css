@@ -82,3 +82,21 @@ button:disabled { opacity: .6; cursor: progress; }
 }
 
 .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 9; max-width: calc(100% - 32px); }
+
+/* 문자 */
+textarea { font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); resize: vertical; }
+.count { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
+.msgs { list-style: none; margin: 0; padding: 0; }
+.msg { border-bottom: 1px solid var(--line); padding: 10px 0; }
+.msg.unread { border-left: 3px solid var(--primary); padding-left: 8px; }
+.msg-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.msg-dir { font-size: 12px; color: var(--muted); }
+.msg-num { font-weight: 600; }
+.msg-time { margin-left: auto; font-size: 12px; color: var(--muted); }
+.msg-body { white-space: pre-wrap; word-break: break-word; margin: 4px 0; }
+.msg-sub { font-size: 13px; color: var(--muted); }
+.msg-media { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.msg-media img { max-width: 220px; max-height: 220px; border-radius: 8px; border: 1px solid var(--line); }
+.msg-actions { display: flex; gap: 6px; }
+.tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--bg); color: var(--muted); }
+.tag.err { color: var(--danger); }

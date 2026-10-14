@@ -10,6 +10,8 @@ import subprocess
 import threading
 import time
 
+import sms
+
 LTE_CONN = "lte"                 # NetworkManager 연결 이름
 HOSTAPD_CONF = "/etc/hostapd/hostapd.conf"
 LEASES = "/var/lib/misc/dnsmasq.leases"
@@ -56,6 +58,8 @@ def _num(x):
 
 class Backend:
     def __init__(self):
+        # 문자: 수신 수집기(백그라운드 스레드) + sqlite 보관
+        self.msgs = sms.Messages()
         # 신호 상세값(RSRP 등)은 주기 설정을 해야 갱신됨
         try:
             run(["mmcli", "-m", "any", "--signal-setup=10"], timeout=10, check=False)
@@ -93,6 +97,7 @@ class Backend:
                 "ts": time.time(),
             },
             "clients": len(self.clients()["clients"]),
+            "unread": self.msgs.unread(),
             "system": self._system(),
         }
 
@@ -383,3 +388,25 @@ class Backend:
     def reboot(self):
         threading.Timer(1.5, lambda: subprocess.run(["systemctl", "reboot"])).start()
         return {"ok": True}
+
+    # ================= 문자 (SMS/MMS) =================
+    def messages_list(self, q):
+        return self.msgs.list(q.get("limit", 50), q.get("before"))
+
+    def messages_send(self, d):
+        return self.msgs.send(d.get("number", ""), d.get("text", ""))
+
+    def messages_delete(self, d):
+        ids = d.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise ValueError("삭제할 문자를 고르세요")
+        return self.msgs.delete(ids)
+
+    def messages_read(self, d):
+        return self.msgs.mark_read(d.get("ids"))
+
+    def messages_retry(self, d):
+        return self.msgs.retry(d.get("id"))
+
+    def messages_media(self, msg_id, part):
+        return self.msgs.media(msg_id, part)

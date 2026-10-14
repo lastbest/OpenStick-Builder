@@ -107,7 +107,7 @@ $("#logout").addEventListener("click", async () => {
 });
 
 // ---------- 탭 ----------
-const loaders = { dash: loadStatus, wifi: loadWifi, wan: loadWan, clients: loadClients, device: loadDevice };
+const loaders = { dash: loadStatus, sms: loadSms, wifi: loadWifi, wan: loadWan, clients: loadClients, device: loadDevice };
 $$(".tabs button").forEach((b) => b.addEventListener("click", () => openTab(b.dataset.tab)));
 
 function openTab(name) {
@@ -162,12 +162,131 @@ async function loadStatus() {
     (w.connected_sec ? ` (${fmtDur(w.connected_sec)})` : "");
 
   $("#d-clients").textContent = `${s.clients}대`;
+  setSmsBadge(s.unread);
   $("#d-uptime").textContent = fmtDur(sys.uptime);
   $("#d-mem").textContent = sys.mem_total_kb
     ? `${Math.round((sys.mem_total_kb - sys.mem_avail_kb) / 1024)} / ${Math.round(sys.mem_total_kb / 1024)} MB` : "-";
   $("#d-load").textContent = (sys.load || []).join(" ");
   $("#d-temp").textContent = dash(sys.temp_c, " °C");
 }
+
+// ---------- 문자 ----------
+let smsOldest = null;
+
+function setSmsBadge(n) {
+  const b = $("#sms-badge");
+  b.textContent = n > 99 ? "99+" : String(n || "");
+  b.classList.toggle("hidden", !n);
+}
+
+function smsSegments(text) {
+  const gsm = /^[\x20-\x7E\n\r£¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉÄÖÑÜ§¿äöñüà]*$/.test(text);
+  const n = [...text].length;
+  const [one, many] = gsm ? [160, 153] : [70, 67];
+  return { n, parts: n === 0 ? 0 : n <= one ? 1 : Math.ceil(n / many) };
+}
+$("#sms-form").text.addEventListener("input", (e) => {
+  const { n, parts } = smsSegments(e.target.value);
+  $("#sms-count").textContent = `${n}자 · SMS ${parts}건${parts > 1 ? " (나뉘어 발송, 건별 요금)" : ""}`;
+});
+
+const fmtTime = (ts) => {
+  const d = new Date(ts * 1000), now = new Date();
+  const hm = d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === now.toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+};
+const STATUS = { pending: "MMS 받는 중", error: "MMS 받기 실패", expired: "MMS 기간 만료", failed: "발송 실패" };
+
+const fmtNum = (n) => (n || "").replace(/^\+82/, "0");
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function renderMsg(m) {
+  const li = el("li", "msg" + (m.direction === "in" && !m.read ? " unread" : ""));
+  const head = el("div", "msg-head");
+  head.append(el("span", "msg-dir", m.direction === "in" ? "받음" : "보냄"), el("span", "msg-num", fmtNum(m.number) || "(번호 없음)"));
+  if (m.kind === "mms") head.append(el("span", "tag", "MMS"));
+  if (STATUS[m.status]) head.append(el("span", "tag err", STATUS[m.status]));
+  head.append(el("span", "msg-time", fmtTime(m.ts)));
+  li.append(head);
+  if (m.subject && m.subject !== "[제목없음]") li.append(el("div", "msg-sub", m.subject));
+  if (m.text) li.append(el("div", "msg-body", m.text));
+  if (m.parts && m.parts.length) {
+    const media = el("div", "msg-media");
+    m.parts.forEach((p, i) => {
+      const url = `/api/messages/media?id=${m.id}&part=${i}`;
+      if (p.type.startsWith("image/")) {
+        const a = el("a"); a.href = url; a.target = "_blank"; a.rel = "noopener";
+        const img = el("img"); img.src = url; img.alt = p.name || "사진"; img.loading = "lazy";
+        a.append(img); media.append(a);
+      } else {
+        const a = el("a", "tag", `📎 ${p.name || p.type}`); a.href = url; media.append(a);
+      }
+    });
+    li.append(media);
+  }
+  if (m.error) li.append(el("div", "muted small", m.error));
+  const act = el("div", "msg-actions");
+  if (m.number) {
+    const r = el("button", "ghost small", "답장");
+    r.addEventListener("click", () => {
+      const f = $("#sms-form"); f.number.value = fmtNum(m.number); f.text.focus();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    act.append(r);
+  }
+  if (m.kind === "mms" && (m.status === "error" || m.status === "pending")) {
+    const r = el("button", "ghost small", "다시 받기");
+    r.addEventListener("click", () => api("/api/messages/retry", { id: m.id }).then(() => toast("다시 받는 중…")).catch((e) => toast(e.message)));
+    act.append(r);
+  }
+  const d = el("button", "ghost small", "삭제");
+  d.addEventListener("click", async () => {
+    if (!confirm("이 문자를 삭제할까요?")) return;
+    try { await api("/api/messages/delete", { ids: [m.id] }); li.remove(); } catch (e) { toast(e.message); }
+  });
+  act.append(d);
+  li.append(act);
+  return li;
+}
+
+async function loadSms(more = false) {
+  const r = await api(`/api/messages?limit=50${more && smsOldest ? `&before=${smsOldest}` : ""}`);
+  const list = $("#sms-list");
+  const items = r.messages.map(renderMsg);
+  if (more) list.append(...items); else list.replaceChildren(...items);
+  if (!more && !items.length) list.append(el("li", "muted", "문자가 없습니다"));
+  smsOldest = r.messages.length ? r.messages[r.messages.length - 1].id : smsOldest;
+  $("#sms-more").classList.toggle("hidden", r.messages.length < 50);
+  $("#sms-info").textContent = r.error ? `수집 오류: ${r.error}` :
+    r.last_poll ? `마지막 확인 ${fmtTime(r.last_poll)} · 15초마다 자동 수신` : "";
+  setSmsBadge(r.unread);
+  const unread = r.messages.filter((m) => m.direction === "in" && !m.read).map((m) => m.id);
+  if (unread.length) api("/api/messages/read", { ids: unread }).then(() => setSmsBadge(Math.max(0, r.unread - unread.length))).catch(() => {});
+}
+$("#sms-more").addEventListener("click", () => loadSms(true).catch((e) => toast(e.message)));
+$("#sms-refresh").addEventListener("click", () => loadSms().catch((e) => toast(e.message)));
+$("#sms-readall").addEventListener("click", () => api("/api/messages/read", {}).then(() => loadSms()).catch((e) => toast(e.message)));
+
+$("#sms-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const { parts } = smsSegments(f.text.value);
+  if (parts > 1 && !confirm(`긴 문자라 SMS ${parts}건으로 나뉘어 발송됩니다. 보낼까요?`)) return;
+  busy($("button", f), async () => {
+    try {
+      await api("/api/messages/send", { number: f.number.value, text: f.text.value });
+      setResult(f, "보냈습니다.", true);
+      f.text.value = ""; $("#sms-count").textContent = "0자";
+      loadSms().catch(() => {});
+    } catch (err) { setResult(f, err.message, false); }
+  });
+});
 
 // ---------- WiFi ----------
 const chSel = $('#wifi-form select[name="channel"]');

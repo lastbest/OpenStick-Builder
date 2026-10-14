@@ -34,6 +34,7 @@
 
   <nav class="tabs">
     <button data-tab="dash" class="active">대시보드</button>
+    <button data-tab="sms">문자 <span id="sms-badge" class="count hidden"></span></button>
     <button data-tab="wifi">WiFi</button>
     <button data-tab="wan">인터넷</button>
     <button data-tab="clients">접속 기기</button>
@@ -80,6 +81,24 @@
             <dt>온도</dt><dd id="d-temp">-</dd>
           </dl>
         </div>
+      </div>
+    </section>
+
+    <!-- 문자 -->
+    <section id="tab-sms" class="tab hidden">
+      <form id="sms-form" class="card form">
+        <h2>문자 보내기</h2>
+        <label>받는 번호<input name="number" inputmode="tel" autocomplete="off" placeholder="01012345678" required></label>
+        <label>내용<textarea name="text" rows="3" maxlength="1000" required></textarea></label>
+        <p class="muted small" id="sms-count">0자</p>
+        <button class="primary">보내기</button>
+        <p class="result"></p>
+      </form>
+      <div class="card">
+        <h2>받은/보낸 문자 <span><button id="sms-readall" class="ghost small">모두 읽음</button> <button id="sms-refresh" class="ghost small">새로고침</button></span></h2>
+        <p class="muted small" id="sms-info"></p>
+        <ul id="sms-list" class="msgs"></ul>
+        <button id="sms-more" class="ghost hidden">더 보기</button>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 cd "$(dirname "$0")"
 
 install -d /opt/openstick-admin/www /etc/openstick-admin
-install -m 0644 server.py backend.py /opt/openstick-admin/
+install -m 0644 server.py backend.py sms.py /opt/openstick-admin/
 install -m 0644 www/* /opt/openstick-admin/www/
 chmod 0700 /etc/openstick-admin
 install -m 0644 openstick-admin.service /etc/systemd/system/

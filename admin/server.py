@@ -10,13 +10,14 @@ import hashlib
 import hmac
 import json
 import mimetypes
+import re
 import os
 import secrets
 import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 WWW = os.path.join(os.path.dirname(os.path.abspath(__file__)), "www")
 SESSION_TTL = 30 * 60          # 마지막 요청 후 30분
@@ -257,6 +258,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._login_response()
 
             be = app["backend"]
+            q = {k: v[-1] for k, v in parse_qs(urlparse(self.path).query).items()}
+            if (method, path) == ("GET", "/api/messages/media"):
+                ctype, data, name = be.messages_media(q.get("id", "0"), q.get("part", "0"))
+                return self._send_media(ctype, data, name)
             routes = {
                 ("GET", "/api/status"): be.status,
                 ("GET", "/api/clients"): be.clients,
@@ -267,6 +272,11 @@ class Handler(BaseHTTPRequestHandler):
                 ("POST", "/api/wan/apn"): lambda: be.wan_set_apn(self._read_json()),
                 ("GET", "/api/device"): be.device,
                 ("POST", "/api/reboot"): be.reboot,
+                ("GET", "/api/messages"): lambda: be.messages_list(q),
+                ("POST", "/api/messages/send"): lambda: be.messages_send(self._read_json()),
+                ("POST", "/api/messages/delete"): lambda: be.messages_delete(self._read_json()),
+                ("POST", "/api/messages/read"): lambda: be.messages_read(self._read_json()),
+                ("POST", "/api/messages/retry"): lambda: be.messages_retry(self._read_json()),
             }
             fn = routes.get((method, path))
             if not fn:
@@ -279,6 +289,21 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:           # noqa: BLE001
             self.log_error("API 오류 %s: %r", path, e)
             self._send_json(500, {"error": f"내부 오류: {e}"})
+
+    SAFE_INLINE = ("image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp")
+
+    def _send_media(self, ctype, data, name):
+        """MMS attachment. Only plain images are shown inline; everything else downloads."""
+        inline = ctype in self.SAFE_INLINE
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", ctype if inline else "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        fname = re.sub(r"[^A-Za-z0-9._-]", "_", name or "attachment")
+        self.send_header("Content-Disposition", f'{"inline" if inline else "attachment"}; filename="{fname}"')
+        self._security_headers()
+        self.end_headers()
+        self.wfile.write(data)
 
     def _login_response(self):
         token, csrf = self.server.app["sessions"].create()
