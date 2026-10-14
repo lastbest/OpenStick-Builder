@@ -125,6 +125,11 @@ systemctl enable hostapd
 # crash the WCNSS firmware (wlan0 vanishes, hostapd stops) - keep them off it.
 systemctl disable wpa_supplicant || true
 
+# Web admin page on http://192.168.100.1/ (installed by debootstrap.sh unless WITH_ADMIN=0)
+if [ -f /etc/systemd/system/openstick-admin.service ]; then
+    systemctl enable openstick-admin
+fi
+
 # Make sure ModemManager is enabled for LTE
 systemctl enable ModemManager
 systemctl enable rmtfs # unsure if needed i forgot why i added it. But builds take a long time so i don't want to remove it now

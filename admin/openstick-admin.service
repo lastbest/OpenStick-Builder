@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenStick admin web page
+After=network-online.target NetworkManager.service ModemManager.service
+Wants=network-online.target
+# Keep retrying until br0 (192.168.100.1) exists
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/openstick-admin/server.py --listen 192.168.100.1:80 --config /etc/openstick-admin/config.json
+Restart=on-failure
+RestartSec=5
+MemoryMax=40M
+Nice=5
+# Runs as root: it edits hostapd/NetworkManager settings. Light sandboxing only.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

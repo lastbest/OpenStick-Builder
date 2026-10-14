@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenStick 관리</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+
+<!-- 로그인 / 최초 설정 -->
+<section id="auth" class="auth hidden">
+  <form id="auth-form" class="card auth-card">
+    <h1>OpenStick 관리</h1>
+    <p id="auth-desc" class="muted">관리자 비밀번호를 입력하세요.</p>
+    <input id="auth-pw" type="password" autocomplete="current-password" placeholder="비밀번호" required>
+    <input id="auth-pw2" class="hidden" type="password" autocomplete="new-password" placeholder="비밀번호 확인">
+    <button type="submit" class="primary">로그인</button>
+    <p id="auth-err" class="error"></p>
+  </form>
+</section>
+
+<!-- 본 화면 -->
+<div id="app" class="hidden">
+  <header class="topbar">
+    <div class="brand">OpenStick <span id="mock-badge" class="badge hidden">모의</span></div>
+    <div class="top-status">
+      <span id="top-signal" class="bars" aria-label="신호"><i></i><i></i><i></i><i></i></span>
+      <span id="top-op">-</span>
+    </div>
+    <button id="logout" class="ghost">로그아웃</button>
+  </header>
+
+  <nav class="tabs">
+    <button data-tab="dash" class="active">대시보드</button>
+    <button data-tab="wifi">WiFi</button>
+    <button data-tab="wan">인터넷</button>
+    <button data-tab="clients">접속 기기</button>
+    <button data-tab="device">기기 관리</button>
+  </nav>
+
+  <main>
+    <!-- 대시보드 -->
+    <section id="tab-dash" class="tab">
+      <div class="grid">
+        <div class="card">
+          <h2>LTE 신호</h2>
+          <div class="big"><span id="d-bars" class="bars big-bars"><i></i><i></i><i></i><i></i></span> <span id="d-quality">-</span></div>
+          <dl class="kv">
+            <dt>RSRP</dt><dd id="d-rsrp">-</dd>
+            <dt>RSRQ</dt><dd id="d-rsrq">-</dd>
+            <dt>SINR</dt><dd id="d-snr">-</dd>
+          </dl>
+        </div>
+        <div class="card">
+          <h2>인터넷</h2>
+          <div class="big" id="d-conn">-</div>
+          <dl class="kv">
+            <dt>통신사</dt><dd id="d-op">-</dd>
+            <dt>망</dt><dd id="d-tech">-</dd>
+            <dt>WAN IP</dt><dd id="d-ip">-</dd>
+            <dt>APN</dt><dd id="d-apn">-</dd>
+            <dt>SIM</dt><dd id="d-sim">-</dd>
+          </dl>
+        </div>
+        <div class="card">
+          <h2>속도</h2>
+          <div class="speed"><span>↓</span><b id="d-down">-</b></div>
+          <div class="speed"><span>↑</span><b id="d-up">-</b></div>
+          <p class="muted small">이번 LTE 연결 사용량 <span id="d-total">-</span></p>
+        </div>
+        <div class="card">
+          <h2>시스템</h2>
+          <dl class="kv">
+            <dt>접속 기기</dt><dd id="d-clients">-</dd>
+            <dt>가동 시간</dt><dd id="d-uptime">-</dd>
+            <dt>메모리</dt><dd id="d-mem">-</dd>
+            <dt>부하</dt><dd id="d-load">-</dd>
+            <dt>온도</dt><dd id="d-temp">-</dd>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <!-- WiFi -->
+    <section id="tab-wifi" class="tab hidden">
+      <form id="wifi-form" class="card form">
+        <h2>WiFi 설정</h2>
+        <label>WiFi 이름 (SSID)<input name="ssid" maxlength="32" required></label>
+        <label>새 비밀번호 <span class="muted small">(바꿀 때만 입력, 8~63자)</span>
+          <input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="63"></label>
+        <label>보안 방식
+          <select name="security"><option>WPA2</option><option>WPA2/WPA3</option></select></label>
+        <label>채널
+          <select name="channel"></select></label>
+        <label>최대 접속 수 <span class="muted small">(0 = 제한 없음)</span>
+          <input name="max_clients" type="number" min="0" max="32"></label>
+        <label class="check"><input name="hidden" type="checkbox"> SSID 숨기기</label>
+        <label class="check"><input name="isolate" type="checkbox"> 기기 간 통신 차단 (AP 격리)</label>
+        <p class="warn">저장하면 WiFi가 재시작되어 WiFi로 접속 중인 기기는 잠깐 끊깁니다. 이름/비밀번호를 바꾸면 새 정보로 다시 연결하세요.</p>
+        <button class="primary">저장</button>
+        <p class="result"></p>
+      </form>
+    </section>
+
+    <!-- 인터넷 -->
+    <section id="tab-wan" class="tab hidden">
+      <form id="data-form" class="card form">
+        <h2>데이터 연결</h2>
+        <label class="check"><input name="data_enabled" type="checkbox"> 모바일 데이터 사용</label>
+        <label class="check"><input name="roaming_allowed" type="checkbox"> 로밍 중 데이터 허용</label>
+        <button class="primary">저장</button>
+        <p class="result"></p>
+      </form>
+
+      <form id="apn-form" class="card form">
+        <h2>APN</h2>
+        <dl class="kv" id="bearer-info"></dl>
+        <label class="radio"><input type="radio" name="apn_mode" value="auto"> 자동 <span class="muted small">(SIM 통신사 기준 자동 선택 — 권장)</span></label>
+        <label class="radio"><input type="radio" name="apn_mode" value="manual"> 수동</label>
+        <fieldset id="apn-manual">
+          <label>APN<input name="apn" maxlength="63" placeholder="예: alwayson.ktfwing.com"></label>
+          <label>사용자명<input name="username" maxlength="64" autocomplete="off"></label>
+          <label>비밀번호<input name="password" type="password" maxlength="64" autocomplete="new-password"></label>
+        </fieldset>
+        <label>IP 타입
+          <select name="ip_type"><option value="ipv4v6">IPv4 + IPv6</option><option value="ipv4">IPv4</option><option value="ipv6">IPv6</option></select></label>
+        <p class="warn">저장하면 LTE를 다시 연결합니다(수십 초). 연결에 실패하면 이전 설정으로 자동 복구됩니다.</p>
+        <button class="primary">저장 후 재연결</button>
+        <p class="result"></p>
+      </form>
+    </section>
+
+    <!-- 접속 기기 -->
+    <section id="tab-clients" class="tab hidden">
+      <div class="card">
+        <h2>접속 기기 <button id="clients-refresh" class="ghost small">새로고침</button></h2>
+        <table class="table">
+          <thead><tr><th>이름</th><th>IP</th><th>MAC</th><th>연결</th><th>접속 시간</th></tr></thead>
+          <tbody id="clients-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 기기 관리 -->
+    <section id="tab-device" class="tab hidden">
+      <div class="card">
+        <h2>기기 정보</h2>
+        <dl class="kv" id="device-info"></dl>
+      </div>
+      <form id="pw-form" class="card form">
+        <h2>관리자 비밀번호 변경</h2>
+        <label>현재 비밀번호<input name="old" type="password" autocomplete="current-password" required></label>
+        <label>새 비밀번호 <span class="muted small">(8~64자)</span><input name="new" type="password" autocomplete="new-password" minlength="8" maxlength="64" required></label>
+        <label>새 비밀번호 확인<input name="new2" type="password" autocomplete="new-password" required></label>
+        <button class="primary">변경</button>
+        <p class="result"></p>
+      </form>
+      <div class="card">
+        <h2>재부팅</h2>
+        <p class="muted">약 1분 후 다시 접속됩니다.</p>
+        <button id="reboot" class="danger">재부팅</button>
+        <p class="result" id="reboot-result"></p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+</body>
+</html>

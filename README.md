@@ -87,6 +87,11 @@ The generated firmware files will be stored under the `files` directory
    - click and run ***Run workflow***
    - once the workflow is done, click on the workflow summary and then download the resulting artifact
 
+## Admin page
+Images include a small web admin page on **http://192.168.100.1/** (LTE status, WiFi,
+APN, clients, reboot …), see [`admin/`](admin/README.md). Build with `WITH_ADMIN=0` to
+leave it out, or run `admin/install.sh` on an already flashed stick.
+
 ## Customizations
 Edit [`scripts/setup.sh`](scripts/setup.sh) to add/remove packages. Note that this script is running inside the `chroot` environment.
 

@@ -4,6 +4,7 @@ CHROOT=${CHROOT=$(pwd)/rootfs}
 RELEASE=${RELEASE=stable}
 HOST_NAME=${HOST_NAME=openstick}
 KERNEL_APK=${KERNEL_APK=linux-postmarketos-qcom-msm8916-6.12.1-r6.apk}
+WITH_ADMIN=${WITH_ADMIN=1}
 . scripts/board.sh
 
 rm -rf ${CHROOT}
@@ -50,6 +51,15 @@ chmod 0600 ${CHROOT}/etc/NetworkManager/system-connections/*
 cp configs/99-custom.conf ${CHROOT}/etc/NetworkManager/conf.d/
 mkdir -p ${CHROOT}/etc/sysctl.d
 cp configs/sysctl.d/*.conf ${CHROOT}/etc/sysctl.d/
+
+# web admin page (admin/), enabled by setup.sh when present
+if [ "${WITH_ADMIN}" = "1" ]; then
+    install -d ${CHROOT}/opt/openstick-admin/www ${CHROOT}/etc/openstick-admin
+    install -m 0644 admin/server.py admin/backend.py ${CHROOT}/opt/openstick-admin/
+    install -m 0644 admin/www/* ${CHROOT}/opt/openstick-admin/www/
+    chmod 0700 ${CHROOT}/etc/openstick-admin
+    install -m 0644 admin/openstick-admin.service ${CHROOT}/etc/systemd/system/
+fi
 
 # chroot setup
 cp configs/install_dnsproxy.sh ${CHROOT}
