@@ -100,3 +100,9 @@ textarea { font: inherit; padding: 9px 10px; border: 1px solid var(--line); bord
 .msg-actions { display: flex; gap: 6px; }
 .tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--bg); color: var(--muted); }
 .tag.err { color: var(--danger); }
+.bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 0 8px; border-bottom: 1px solid var(--line); }
+.bulk .spacer { flex: 1; }
+.small-select { padding: 3px 6px; font-size: 12px; }
+label.check.small { font-size: 13px; }
+.msg-sel { width: 16px; height: 16px; margin: 0; }
+.kv dd.nw { white-space: nowrap; }

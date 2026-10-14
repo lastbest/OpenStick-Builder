@@ -81,6 +81,15 @@
             <dt>온도</dt><dd id="d-temp">-</dd>
           </dl>
         </div>
+        <div class="card">
+          <h2>저장공간</h2>
+          <dl class="kv">
+            <dt>디스크 여유</dt><dd id="d-disk" class="nw">-</dd>
+            <dt>문자</dt><dd id="d-msgs" class="nw">-</dd>
+            <dt>MMS 첨부</dt><dd id="d-media" class="nw">-</dd>
+          </dl>
+          <p class="muted small" id="d-prune"></p>
+        </div>
       </div>
     </section>
 
@@ -97,6 +106,16 @@
       <div class="card">
         <h2>받은/보낸 문자 <span><button id="sms-readall" class="ghost small">모두 읽음</button> <button id="sms-refresh" class="ghost small">새로고침</button></span></h2>
         <p class="muted small" id="sms-info"></p>
+        <div class="bulk">
+          <label class="check small"><input type="checkbox" id="sms-selall"> 전체 선택</label>
+          <button id="sms-delsel" class="ghost small" disabled>선택 삭제</button>
+          <span class="spacer"></span>
+          <select id="sms-olddays" class="small-select">
+            <option value="30">30일</option><option value="90" selected>90일</option>
+            <option value="180">180일</option><option value="365">1년</option>
+          </select>
+          <button id="sms-delold" class="ghost small">지난 문자 삭제</button>
+        </div>
         <ul id="sms-list" class="msgs"></ul>
         <button id="sms-more" class="ghost hidden">더 보기</button>
       </div>

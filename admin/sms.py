@@ -29,6 +29,8 @@ UE_MODE = "csps-2"               # data centric, combined attach -> SMS over SGs
 UE_RETRY_SEC = 60
 MMS_MAX_BYTES = 3 * 1024 * 1024
 MMS_MAX_RETRIES = 6
+MEDIA_CAP_BYTES = 500 * 1024 * 1024     # all MMS attachments together
+MIN_FREE_BYTES = 300 * 1024 * 1024      # keep this much free on the rootfs
 NUMBER_RE = re.compile(r"\+?[0-9]{3,20}")
 
 
@@ -363,6 +365,10 @@ class Messages:
         self.db = sqlite3.connect(os.path.join(data_dir, "messages.db"), check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(messages)")}
+        if "pruned" not in cols:                # v0.2: attachments removed to free space
+            self.db.execute("ALTER TABLE messages ADD COLUMN pruned INTEGER NOT NULL DEFAULT 0")
+            self.db.commit()
         self.lock = threading.Lock()
         self.wan_if, self.mmsc_url = wan_if, mmsc_url
         self.last_ue_try = 0
@@ -412,9 +418,18 @@ class Messages:
             self.db.commit()
         return {"ok": True}
 
-    def delete(self, ids):
-        ids = [int(i) for i in ids]
+    def delete(self, ids=None, older_than_days=None):
         with self.lock:
+            if older_than_days is not None:
+                days = int(older_than_days)
+                if days < 1:
+                    raise ValueError("기간은 1일 이상")
+                cutoff = int(time.time()) - days * 86400
+                ids = [r[0] for r in self.db.execute("SELECT id FROM messages WHERE ts < ?", (cutoff,))]
+            else:
+                ids = [int(i) for i in (ids or [])]
+                if not ids or len(ids) > 1000:
+                    raise ValueError("삭제할 문자를 고르세요 (최대 1000건)")
             for i in ids:
                 row = self.db.execute("SELECT parts FROM messages WHERE id=?", (i,)).fetchone()
                 for p in json.loads((row and row["parts"]) or "[]"):
@@ -425,6 +440,49 @@ class Messages:
                 self.db.execute("DELETE FROM messages WHERE id=?", (i,))
             self.db.commit()
         return {"ok": True, "deleted": len(ids)}
+
+    # ----- storage
+    def storage(self):
+        media = 0
+        for e in os.scandir(self.media_dir):
+            if e.is_file():
+                media += e.stat().st_size
+        st = os.statvfs(self.dir)
+        with self.lock:
+            count = self.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            pruned = self.db.execute("SELECT COUNT(*) FROM messages WHERE pruned=1").fetchone()[0]
+        db_bytes = os.path.getsize(os.path.join(self.dir, "messages.db"))
+        return {"messages": count, "media_bytes": media, "db_bytes": db_bytes, "pruned": pruned,
+                "media_cap_bytes": MEDIA_CAP_BYTES, "min_free_bytes": MIN_FREE_BYTES,
+                "disk_free_bytes": st.f_bavail * st.f_frsize, "disk_total_bytes": st.f_blocks * st.f_frsize}
+
+    def prune(self):
+        """Delete the oldest MMS attachments (text is kept) while attachments exceed
+        MEDIA_CAP_BYTES or the disk has less than MIN_FREE_BYTES free."""
+        s = self.storage()
+        media, free = s["media_bytes"], s["disk_free_bytes"]
+        if media <= MEDIA_CAP_BYTES and free >= MIN_FREE_BYTES:
+            return 0
+        with self.lock:
+            rows = self.db.execute("SELECT id, parts FROM messages WHERE parts IS NOT NULL AND parts != '[]'"
+                                   " ORDER BY ts ASC, id ASC").fetchall()
+        n = 0
+        for r in rows:
+            if media <= MEDIA_CAP_BYTES and free >= MIN_FREE_BYTES:
+                break
+            for p in json.loads(r["parts"]):
+                path = os.path.join(self.media_dir, p["file"])
+                try:
+                    size = os.path.getsize(path)
+                    os.remove(path)
+                    media, free = media - size, free + size
+                except OSError:
+                    pass
+            self._set(r["id"], parts="[]", pruned=1)
+            n += 1
+        if n:
+            print(f"sms: pruned attachments of {n} old MMS (media {media >> 20} MB, free {free >> 20} MB)", flush=True)
+        return n
 
     def media(self, msg_id, part):
         with self.lock:
@@ -497,6 +555,7 @@ class Messages:
         for path in (modem.get("generic", {}).get("sms") or []) or self._list_paths():
             self._collect(path)
         self._fetch_pending()
+        self.prune()
         self.last_poll = int(time.time())
 
     def _list_paths(self):
@@ -587,7 +646,8 @@ class Messages:
         finally:
             os.unlink(tmp)
         h, parts = parse_retrieve_conf(data)
-        stored, texts = [], []
+        stored, texts, pruned = [], [], False
+        self.prune()
         for i, p in enumerate(parts):
             if p["type"] == "application/smil":
                 continue
@@ -595,12 +655,16 @@ class Messages:
                 texts.append(decode_text(p["data"], p["charset"] or 106).strip())
                 continue
             fname = f"{r['id']}-{i}"
+            st = os.statvfs(self.dir)
+            if st.f_bavail * st.f_frsize - len(p["data"]) < MIN_FREE_BYTES // 2:
+                pruned = True                   # disk nearly full even after pruning: keep text only
+                continue
             with open(os.path.join(self.media_dir, fname), "wb") as f:
                 f.write(p["data"])
             stored.append({"type": p["type"], "name": _safe_name(p["name"]), "file": fname, "size": len(p["data"])})
         sender = h.get("from")
         self._set(r["id"], status="retrieved", text="\n".join(t for t in texts if t), subject=h.get("subject"),
-                  parts=json.dumps(stored), error=None,
+                  parts=json.dumps(stored), error=None, pruned=int(pruned),
                   **({"number": _clean_number(sender)} if sender else {}))
         if r["mms_tid"] and self.mmsc_url:             # best effort, tells the MMSC we have it
             fd, ack = tempfile.mkstemp(dir=self.dir)

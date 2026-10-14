@@ -43,6 +43,7 @@ class Backend:
                     "lan_down_bytes": self.rx, "lan_up_bytes": self.tx, "ts": time.time()},
             "clients": len(self.clients()["clients"]),
             "unread": self.msgs.unread(),
+            "storage": self.msgs.storage(),
             "system": {"uptime": int(time.time() - _start) + 3600, "load": ["0.12", "0.20", "0.18"],
                        "mem_total_kb": 382964, "mem_avail_kb": 256860, "temp_c": 41.5},
         }
@@ -110,6 +111,8 @@ class Backend:
         return self.msgs.send(d.get("number", ""), d.get("text", ""))
 
     def messages_delete(self, d):
+        if d.get("older_than_days") is not None:
+            return self.msgs.delete(older_than_days=d["older_than_days"])
         return self.msgs.delete(d.get("ids") or [])
 
     def messages_read(self, d):

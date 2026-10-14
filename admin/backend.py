@@ -98,6 +98,7 @@ class Backend:
             },
             "clients": len(self.clients()["clients"]),
             "unread": self.msgs.unread(),
+            "storage": self.msgs.storage(),
             "system": self._system(),
         }
 
@@ -409,8 +410,10 @@ class Backend:
         return self.msgs.send(d.get("number", ""), d.get("text", ""))
 
     def messages_delete(self, d):
+        if d.get("older_than_days") is not None:
+            return self.msgs.delete(older_than_days=d["older_than_days"])
         ids = d.get("ids") or []
-        if not isinstance(ids, list) or not ids:
+        if not isinstance(ids, list):
             raise ValueError("삭제할 문자를 고르세요")
         return self.msgs.delete(ids)
 

@@ -168,6 +168,14 @@ async function loadStatus() {
     ? `${Math.round((sys.mem_total_kb - sys.mem_avail_kb) / 1024)} / ${Math.round(sys.mem_total_kb / 1024)} MB` : "-";
   $("#d-load").textContent = (sys.load || []).join(" ");
   $("#d-temp").textContent = dash(sys.temp_c, " °C");
+  const st = s.storage;
+  if (st) {
+    $("#d-disk").textContent = `${fmtBytes(st.disk_free_bytes)} / ${fmtBytes(st.disk_total_bytes)}`;
+    $("#d-msgs").textContent = `${st.messages}건 (${fmtBytes(st.db_bytes)})`;
+    $("#d-media").textContent = `${fmtBytes(st.media_bytes)} / ${fmtBytes(st.media_cap_bytes)}`;
+    $("#d-prune").textContent = `한도를 넘거나 디스크 여유가 ${fmtBytes(st.min_free_bytes)} 미만이면 오래된 MMS 사진부터 자동 정리(글은 유지)` +
+      (st.pruned ? ` · 정리된 MMS ${st.pruned}건` : "");
+  }
 }
 
 // ---------- 문자 ----------
@@ -209,6 +217,9 @@ function el(tag, cls, text) {
 function renderMsg(m) {
   const li = el("li", "msg" + (m.direction === "in" && !m.read ? " unread" : ""));
   const head = el("div", "msg-head");
+  const sel = el("input", "msg-sel"); sel.type = "checkbox"; sel.dataset.id = m.id;
+  sel.addEventListener("change", syncBulk);
+  head.append(sel);
   head.append(el("span", "msg-dir", m.direction === "in" ? "받음" : "보냄"), el("span", "msg-num", fmtNum(m.number) || "(번호 없음)"));
   if (m.kind === "mms") head.append(el("span", "tag", "MMS"));
   if (STATUS[m.status]) head.append(el("span", "tag err", STATUS[m.status]));
@@ -230,6 +241,7 @@ function renderMsg(m) {
     });
     li.append(media);
   }
+  if (m.pruned) li.append(el("div", "muted small", "첨부 정리됨 (저장공간 확보를 위해 사진 삭제, 글은 유지)"));
   if (m.error) li.append(el("div", "muted small", m.error));
   const act = el("div", "msg-actions");
   if (m.number) {
@@ -267,9 +279,31 @@ async function loadSms(more = false) {
   $("#sms-info").textContent = r.error ? `수집 오류: ${r.error}` :
     r.last_poll ? `마지막 확인 ${fmtTime(r.last_poll)} · 15초마다 자동 수신` : "";
   setSmsBadge(r.unread);
+  syncBulk();
   const unread = r.messages.filter((m) => m.direction === "in" && !m.read).map((m) => m.id);
   if (unread.length) api("/api/messages/read", { ids: unread }).then(() => setSmsBadge(Math.max(0, r.unread - unread.length))).catch(() => {});
 }
+function selectedIds() { return $$(".msg-sel:checked").map((c) => +c.dataset.id); }
+function syncBulk() {
+  const n = selectedIds().length;
+  $("#sms-delsel").disabled = !n;
+  $("#sms-delsel").textContent = n ? `선택 삭제 (${n})` : "선택 삭제";
+}
+$("#sms-selall").addEventListener("change", (e) => { $$(".msg-sel").forEach((c) => { c.checked = e.target.checked; }); syncBulk(); });
+$("#sms-delsel").addEventListener("click", async () => {
+  const ids = selectedIds();
+  if (!ids.length || !confirm(`선택한 문자 ${ids.length}건을 삭제할까요?`)) return;
+  try { const r = await api("/api/messages/delete", { ids }); toast(`${r.deleted}건 삭제`); $("#sms-selall").checked = false; loadSms(); }
+  catch (e) { toast(e.message); }
+});
+$("#sms-delold").addEventListener("click", async () => {
+  const days = +$("#sms-olddays").value;
+  const label = $("#sms-olddays").selectedOptions[0].textContent;
+  if (!confirm(`${label} 넘게 지난 문자를 모두 삭제할까요? (사진 포함, 되돌릴 수 없음)`)) return;
+  try { const r = await api("/api/messages/delete", { older_than_days: days }); toast(`${r.deleted}건 삭제`); loadSms(); }
+  catch (e) { toast(e.message); }
+});
+
 $("#sms-more").addEventListener("click", () => loadSms(true).catch((e) => toast(e.message)));
 $("#sms-refresh").addEventListener("click", () => loadSms().catch((e) => toast(e.message)));
 $("#sms-readall").addEventListener("click", () => api("/api/messages/read", {}).then(() => loadSms()).catch((e) => toast(e.message)));
