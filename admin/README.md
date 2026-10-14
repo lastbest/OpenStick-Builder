@@ -21,7 +21,11 @@ why it lives in this repository.
 | Internet | mobile data on/off, roaming, APN **auto/manual** (user/password/IP type) with **automatic rollback** if the new APN does not connect |
 | Clients | name / IP / MAC / WiFi or USB / signal / connected time |
 | Device | model, OS, kernel, IMEI, modem firmware, ICCID, IMSI; reboot |
-| Messages | SMS inbox/outbox, send and reply, **MMS** (long texts, pictures) downloaded automatically, unread badge, delete, retry |
+| Messages | SMS inbox/outbox, send and reply, **MMS** (long texts, pictures) downloaded automatically, unread badge, bulk/age delete, retry; attachments capped at 500 MB / 300 MB free (oldest pruned, text kept) |
+| Data usage | daily/period usage from nft counters on wwan0, monthly cap with reset day, warning, optional block of client internet when over cap |
+| Clients | block/unblock a client's internet by MAC (refuses to block the requesting client) |
+| Diagnostics | upstream DNS (AdGuard ad-blocking / Cloudflare / Google / carrier, verified + reverted on failure), ping, DNS lookup, traceroute, metered speed test |
+| System | LEDs on/off (blue = LTE up), timezone, service status/restart, journal viewer |
 
 Roadmap: [`../docs/ADMIN_PAGE_PLAN.md`](../docs/ADMIN_PAGE_PLAN.md).
 
@@ -40,6 +44,12 @@ Roadmap: [`../docs/ADMIN_PAGE_PLAN.md`](../docs/ADMIN_PAGE_PLAN.md).
   Korean carriers deliver long texts and pictures as MMS, so this matters there.
 - **Sending:** SMS only; ModemManager splits long texts into concatenated SMS.
 - Expired MMS (stick offline longer than the carrier keeps them) are shown as such.
+
+## nftables
+The admin page keeps its own table `inet osa` (wan_rx/wan_tx counters, `blocked` MAC set,
+`capblock` set). It is re-created from `/var/lib/openstick-admin/settings.json` whenever it
+is missing (e.g. after `systemctl restart nftables`, which flushes the ruleset).
+The pmOS kernel has no tc qdiscs, so per-client bandwidth shaping is not offered.
 
 ## Install
 - **New images:** included by default (`WITH_ADMIN=0 ./build.sh` to leave it out).

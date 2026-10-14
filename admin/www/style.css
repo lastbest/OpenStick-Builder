@@ -106,3 +106,17 @@ textarea { font: inherit; padding: 9px 10px; border: 1px solid var(--line); bord
 label.check.small { font-size: 13px; }
 .msg-sel { width: 16px; height: 16px; margin: 0; }
 .kv dd.nw { white-space: nowrap; }
+
+/* P1-a */
+.meter { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; margin: 2px 0 10px; }
+.meter i { display: block; height: 100%; width: 0; background: var(--ok); }
+.meter i.warn { background: #f59e0b; } .meter i.over { background: var(--danger); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.out { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font: 12px/1.45 ui-monospace, Menlo, monospace; max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-all; margin: 0; }
+.days { display: flex; align-items: flex-end; gap: 3px; height: 90px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.days div { flex: 1; background: var(--primary); opacity: .75; border-radius: 2px 2px 0 0; min-height: 1px; }
+.days div.today { opacity: 1; }
+.plain { list-style: none; margin: 0; padding: 0; }
+.plain li { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); gap: 8px; }
+.state-active { color: var(--ok); } .state-bad { color: var(--danger); }
+#dns-presets label { margin-bottom: 6px; }

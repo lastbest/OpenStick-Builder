@@ -107,7 +107,7 @@ $("#logout").addEventListener("click", async () => {
 });
 
 // ---------- 탭 ----------
-const loaders = { dash: loadStatus, sms: loadSms, wifi: loadWifi, wan: loadWan, clients: loadClients, device: loadDevice };
+const loaders = { dash: loadStatus, sms: loadSms, wifi: loadWifi, wan: loadWan, clients: loadClients, diag: loadDiag, device: loadDevice };
 $$(".tabs button").forEach((b) => b.addEventListener("click", () => openTab(b.dataset.tab)));
 
 function openTab(name) {
@@ -168,6 +168,20 @@ async function loadStatus() {
     ? `${Math.round((sys.mem_total_kb - sys.mem_avail_kb) / 1024)} / ${Math.round(sys.mem_total_kb / 1024)} MB` : "-";
   $("#d-load").textContent = (sys.load || []).join(" ");
   $("#d-temp").textContent = dash(sys.temp_c, " °C");
+  const u = s.usage;
+  if (u) {
+    const pct = u.percent;
+    $("#d-usage").textContent = fmtBytes(u.period.used) + (u.cap_bytes ? ` / ${fmtBytes(u.cap_bytes)}` : "");
+    const bar = $("#d-usage-bar");
+    bar.style.width = `${Math.min(100, pct || 0)}%`;
+    bar.className = pct == null ? "" : pct >= 100 ? "over" : pct >= u.warn_pct ? "warn" : "";
+    $("#d-usage-today").textContent = `↓${fmtBytes(u.today.rx)} ↑${fmtBytes(u.today.tx)}`;
+    $("#d-usage-period").textContent = `${u.period.start} ~`;
+    const w = $("#d-usage-warn");
+    w.textContent = u.blocked_now ? "⛔ 월 한도 초과 — 접속 기기 인터넷 차단 중"
+      : pct != null && pct >= u.warn_pct ? `⚠️ 월 한도의 ${pct}% 사용` : (u.cap_bytes ? "" : "월 한도 미설정");
+    w.className = "small " + (u.blocked_now || (pct != null && pct >= u.warn_pct) ? "error" : "muted");
+  }
   const st = s.storage;
   if (st) {
     $("#d-disk").textContent = `${fmtBytes(st.disk_free_bytes)} / ${fmtBytes(st.disk_total_bytes)}`;
@@ -363,7 +377,45 @@ function syncApnFieldset() {
 }
 $$('#apn-form input[name="apn_mode"]').forEach((r) => r.addEventListener("change", syncApnFieldset));
 
+async function loadUsage() {
+  const u = await api("/api/usage");
+  const f = $("#usage-form");
+  f.cap_gb.value = u.cap_bytes ? +(u.cap_bytes / 2 ** 30).toFixed(1) : 0;
+  f.reset_day.value = u.reset_day;
+  f.warn_pct.value = u.warn_pct;
+  f.block.checked = u.block_over_cap;
+  kv($("#usage-info"), [
+    ["이번 기간", `${u.period.start} ~ (매월 ${u.reset_day}일 초기화)`],
+    ["사용", `${fmtBytes(u.period.used)}${u.cap_bytes ? ` / ${fmtBytes(u.cap_bytes)} (${u.percent}%)` : ""}`],
+    ["받음 / 보냄", `${fmtBytes(u.period.rx)} / ${fmtBytes(u.period.tx)}`],
+    ["오늘", `↓${fmtBytes(u.today.rx)} ↑${fmtBytes(u.today.tx)}`],
+  ].concat(u.blocked_now ? [["상태", "⛔ 한도 초과로 차단 중"]] : []));
+  const max = Math.max(1, ...u.days.map((d) => d.rx + d.tx));
+  const today = new Date().toISOString().slice(0, 10);
+  $("#usage-days").replaceChildren(...u.days.map((d) => {
+    const b = el("div", d.day === today ? "today" : "");
+    b.style.height = `${Math.max(2, (d.rx + d.tx) * 100 / max)}%`;
+    b.title = `${d.day}: ${fmtBytes(d.rx + d.tx)}`;
+    return b;
+  }));
+}
+$("#usage-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const f = e.target;
+  busy($("button.primary", f), async () => {
+    try {
+      await api("/api/usage", { cap_gb: +f.cap_gb.value || 0, reset_day: +f.reset_day.value, warn_pct: +f.warn_pct.value, block: f.block.checked });
+      setResult(f, "저장했습니다.", true); loadUsage().catch(() => {});
+    } catch (err) { setResult(f, err.message, false); }
+  });
+});
+$("#usage-reset").addEventListener("click", async () => {
+  if (!confirm("지금까지 쌓인 데이터 사용량 기록을 모두 지울까요?")) return;
+  try { await api("/api/usage/reset", {}); toast("사용량 기록을 초기화했습니다"); loadUsage(); } catch (e) { toast(e.message); }
+});
+
 async function loadWan() {
+  loadUsage().catch((e) => toast(e.message));
   const w = await api("/api/wan");
   const d = $("#data-form");
   d.data_enabled.checked = w.data_enabled;
@@ -413,13 +465,28 @@ $("#apn-form").addEventListener("submit", (e) => {
 });
 
 // ---------- 접속 기기 ----------
+async function setBlock(mac, name, block) {
+  if (block && !confirm(`${name || mac} 기기의 인터넷을 차단할까요?`)) return;
+  try { await api(block ? "/api/clients/block" : "/api/clients/unblock", { mac, name }); loadClients(); }
+  catch (e) { toast(e.message); }
+}
+
 async function loadClients() {
-  const { clients } = await api("/api/clients");
+  const { clients, blocked_offline: offline } = await api("/api/clients");
+  const bl = $("#blocked-list");
+  bl.replaceChildren(...(offline || []).map((b) => {
+    const li = el("li");
+    const btn = el("button", "ghost small", "해제");
+    btn.addEventListener("click", () => setBlock(b.mac, b.name, false));
+    li.append(el("span", "", `${b.name || "(이름 없음)"} · ${b.mac}`), btn);
+    return li;
+  }));
+  $("#blocked-card").classList.toggle("hidden", !(offline || []).length);
   const body = $("#clients-body");
   if (!clients.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 5; td.className = "muted"; td.textContent = "접속한 기기가 없습니다";
+    td.colSpan = 6; td.className = "muted"; td.textContent = "접속한 기기가 없습니다";
     tr.append(td); body.replaceChildren(tr); return;
   }
   body.replaceChildren(...clients.map((c) => {
@@ -430,13 +497,100 @@ async function loadClients() {
       const td = document.createElement("td");
       td.dataset.label = label; td.textContent = v; tr.append(td);
     });
+    const td = el("td"); td.dataset.label = "인터넷";
+    const btn = el("button", c.blocked ? "danger small" : "ghost small", c.blocked ? "차단됨 · 해제" : "차단");
+    btn.addEventListener("click", () => setBlock(c.mac, c.name, !c.blocked));
+    td.append(btn); tr.append(td);
     return tr;
   }));
 }
 $("#clients-refresh").addEventListener("click", () => loadClients().catch((e) => toast(e.message)));
 
+// ---------- 진단 ----------
+async function loadDiag() {
+  const d = await api("/api/dns");
+  $("#dns-presets").replaceChildren(...d.presets.map((p) => {
+    const l = el("label", "radio");
+    const r = el("input"); r.type = "radio"; r.name = "preset"; r.value = p.id; r.checked = p.id === d.current;
+    l.append(r, document.createTextNode(" " + p.label));
+    return l;
+  }));
+  setResult($("#dns-form"), d.state === "active" ? "" : `dnsproxy 상태: ${d.state}`, d.state === "active");
+}
+$("#dns-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const preset = $('input[name="preset"]:checked', f)?.value;
+  if (!preset) return;
+  setResult(f, "적용 중… (최대 1분 정도 걸릴 수 있습니다)", true);
+  busy($("button", f), async () => {
+    try { await api("/api/dns", { preset }); setResult(f, "적용했습니다.", true); }
+    catch (err) { setResult(f, err.message, false); loadDiag().catch(() => {}); }
+  });
+});
+$$("#diag-form button[data-kind]").forEach((b) => b.addEventListener("click", () => {
+  const kind = b.dataset.kind, host = $("#diag-form").host.value.trim(), out = $("#diag-out");
+  out.classList.remove("hidden");
+  out.textContent = kind === "traceroute" ? "경로 추적 중… (최대 20~40초)" : "실행 중…";
+  busy(b, async () => {
+    try {
+      const r = await api("/api/diag", { kind, host });
+      if (kind === "ping") out.textContent = r.text;
+      else if (kind === "lookup") out.textContent = `${r.name} (조회: ${r.server})\nA     ${r.A.join(", ") || "-"}\nAAAA  ${r.AAAA.join(", ") || "-"}`;
+      else out.textContent = r.hops.map((h) => `${String(h.ttl).padStart(2)}  ${h.ip || "*"}${h.ms != null ? `  ${h.ms} ms` : ""}`).join("\n");
+    } catch (err) { out.textContent = err.message; }
+  });
+}));
+$("#speed-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const f = e.target, mb = +f.mb.value;
+  if (!confirm(`LTE 데이터 ${mb} MB를 사용합니다. 측정할까요?`)) return;
+  setResult(f, "측정 중…", true);
+  busy($("button", f), async () => {
+    try { const r = await api("/api/diag", { kind: "speedtest", mb }); setResult(f, `다운로드 ${r.mbps} Mbps (${fmtBytes(r.bytes)}, ${r.seconds}초)`, true); }
+    catch (err) { setResult(f, err.message, false); }
+  });
+});
+
 // ---------- 기기 관리 ----------
+async function loadSystem() {
+  const s = await api("/api/system");
+  $("#leds-on").checked = s.leds === "on";
+  const tz = $("#tz");
+  if (![...tz.options].some((o) => o.value === s.time.timezone)) tz.add(new Option(s.time.timezone, s.time.timezone));
+  tz.value = s.time.timezone;
+  $("#time-info").textContent = `현재 ${s.time.local}${s.time.ntp_synced ? " · 시간 동기화됨" : " · 시간 동기화 안 됨"}`;
+  $("#svc-body").replaceChildren(...s.services.map((v) => {
+    const tr = el("tr");
+    const st = el("td", v.state === "active" ? "state-active" : "state-bad", v.state);
+    const act = el("td");
+    if (v.can_restart) {
+      const b = el("button", "ghost small", "재시작");
+      b.addEventListener("click", () => {
+        if (!confirm(`${v.name} 재시작: ${v.warning}. 계속할까요?`)) return;
+        busy(b, async () => { try { await api("/api/system/restart", { name: v.name }); toast(`${v.name} 재시작함`); loadSystem(); } catch (e) { toast(e.message); } });
+      });
+      act.append(b);
+    }
+    tr.append(el("td", "", v.name), st, act);
+    return tr;
+  }));
+}
+$("#leds-on").addEventListener("change", (e) => api("/api/system/leds", { mode: e.target.checked ? "on" : "off" }).then(() => toast("표시등 설정을 바꿨습니다")).catch((err) => toast(err.message)));
+$("#tz").addEventListener("change", (e) => api("/api/system/timezone", { timezone: e.target.value }).then(() => { toast("시간대를 바꿨습니다"); loadSystem(); }).catch((err) => toast(err.message)));
+$("#svc-refresh").addEventListener("click", () => loadSystem().catch((e) => toast(e.message)));
+$("#log-load").addEventListener("click", (e) => busy(e.target, async () => {
+  const out = $("#log-out");
+  try {
+    const r = await api(`/api/logs?unit=${$("#log-unit").value}&lines=${$("#log-lines").value}`);
+    out.textContent = r.text || "(로그 없음)";
+    out.classList.remove("hidden");
+    out.scrollTop = out.scrollHeight;
+  } catch (err) { toast(err.message); }
+}));
+
 async function loadDevice() {
+  loadSystem().catch((e) => toast(e.message));
   const d = await api("/api/device");
   kv($("#device-info"), [
     ["모델", d.model], ["호스트명", d.hostname], ["OS", d.os], ["커널", d.kernel],

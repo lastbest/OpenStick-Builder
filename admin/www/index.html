@@ -38,6 +38,7 @@
     <button data-tab="wifi">WiFi</button>
     <button data-tab="wan">인터넷</button>
     <button data-tab="clients">접속 기기</button>
+    <button data-tab="diag">진단</button>
     <button data-tab="device">기기 관리</button>
   </nav>
 
@@ -80,6 +81,16 @@
             <dt>부하</dt><dd id="d-load">-</dd>
             <dt>온도</dt><dd id="d-temp">-</dd>
           </dl>
+        </div>
+        <div class="card">
+          <h2>데이터 사용량</h2>
+          <div class="big" id="d-usage">-</div>
+          <div class="meter"><i id="d-usage-bar"></i></div>
+          <dl class="kv">
+            <dt>오늘</dt><dd id="d-usage-today" class="nw">-</dd>
+            <dt>기간</dt><dd id="d-usage-period" class="nw">-</dd>
+          </dl>
+          <p class="small" id="d-usage-warn"></p>
         </div>
         <div class="card">
           <h2>저장공간</h2>
@@ -152,6 +163,19 @@
         <p class="result"></p>
       </form>
 
+      <form id="usage-form" class="card form">
+        <h2>데이터 사용량</h2>
+        <dl class="kv" id="usage-info"></dl>
+        <div class="days" id="usage-days"></div>
+        <label>월 한도 (GB) <span class="muted small">(0 = 없음)</span><input name="cap_gb" type="number" min="0" max="10000" step="0.1"></label>
+        <label>매월 초기화일<input name="reset_day" type="number" min="1" max="28"></label>
+        <label>경고 기준 (%)<input name="warn_pct" type="number" min="10" max="100"></label>
+        <label class="check"><input name="block" type="checkbox"> 한도 초과 시 접속 기기 인터넷 차단 <span class="muted small">(동글 자체·문자는 유지)</span></label>
+        <p class="muted small">동글이 직접 센 값이라 통신사 집계와 몇 % 차이가 날 수 있습니다.</p>
+        <div class="row"><button class="primary">저장</button><button type="button" id="usage-reset" class="ghost">사용량 기록 초기화</button></div>
+        <p class="result"></p>
+      </form>
+
       <form id="apn-form" class="card form">
         <h2>APN</h2>
         <dl class="kv" id="bearer-info"></dl>
@@ -175,10 +199,43 @@
       <div class="card">
         <h2>접속 기기 <button id="clients-refresh" class="ghost small">새로고침</button></h2>
         <table class="table">
-          <thead><tr><th>이름</th><th>IP</th><th>MAC</th><th>연결</th><th>접속 시간</th></tr></thead>
+          <thead><tr><th>이름</th><th>IP</th><th>MAC</th><th>연결</th><th>접속 시간</th><th>인터넷</th></tr></thead>
           <tbody id="clients-body"></tbody>
         </table>
+        <p class="muted small">차단하면 그 기기의 인터넷만 막힙니다(관리페이지 접속은 가능). iPhone 등 "비공개 Wi-Fi 주소"를 쓰는 기기는 MAC이 바뀌면 차단이 풀립니다.</p>
       </div>
+      <div class="card" id="blocked-card">
+        <h2>차단 목록 (현재 미접속)</h2>
+        <ul id="blocked-list" class="plain"></ul>
+      </div>
+    </section>
+
+    <!-- 진단 -->
+    <section id="tab-diag" class="tab hidden">
+      <form id="dns-form" class="card form">
+        <h2>DNS / 광고차단</h2>
+        <p class="muted small">접속 기기의 DNS는 동글(192.168.100.1)이 대신 조회합니다. 여기서 동글이 사용할 상위 DNS를 고릅니다.</p>
+        <div id="dns-presets"></div>
+        <button class="primary">적용</button>
+        <p class="result"></p>
+      </form>
+      <form id="diag-form" class="card form">
+        <h2>네트워크 진단</h2>
+        <label>대상 (도메인 또는 IP)<input name="host" value="google.com" autocomplete="off"></label>
+        <div class="row">
+          <button type="button" class="ghost" data-kind="ping">핑</button>
+          <button type="button" class="ghost" data-kind="lookup">DNS 조회</button>
+          <button type="button" class="ghost" data-kind="traceroute">경로 추적</button>
+        </div>
+        <pre id="diag-out" class="out hidden"></pre>
+      </form>
+      <form id="speed-form" class="card form">
+        <h2>속도 측정 (다운로드)</h2>
+        <p class="warn">실제 LTE 데이터를 사용합니다(선택한 크기만큼 요금제에서 차감).</p>
+        <label>크기<select name="mb"><option value="5">5 MB</option><option value="10" selected>10 MB</option><option value="25">25 MB</option></select></label>
+        <button class="primary">측정</button>
+        <p class="result"></p>
+      </form>
     </section>
 
     <!-- 기기 관리 -->
@@ -186,6 +243,34 @@
       <div class="card">
         <h2>기기 정보</h2>
         <dl class="kv" id="device-info"></dl>
+      </div>
+      <div class="card form" id="sys-card">
+        <h2>표시등 · 시간</h2>
+        <label class="check"><input type="checkbox" id="leds-on"> 표시등 켜기 <span class="muted small">(빨강 전원 · 초록 WiFi · 파랑 LTE 연결)</span></label>
+        <label>시간대
+          <select id="tz">
+            <option>Asia/Seoul</option><option>UTC</option><option>Asia/Tokyo</option><option>Asia/Shanghai</option>
+            <option>Europe/London</option><option>America/New_York</option><option>America/Los_Angeles</option>
+          </select></label>
+        <p class="muted small" id="time-info"></p>
+      </div>
+      <div class="card">
+        <h2>서비스 상태 <button id="svc-refresh" class="ghost small">새로고침</button></h2>
+        <table class="table"><tbody id="svc-body"></tbody></table>
+      </div>
+      <div class="card">
+        <h2>시스템 로그</h2>
+        <div class="row">
+          <select id="log-unit">
+            <option value="admin">관리페이지</option><option value="modem">모뎀(ModemManager)</option>
+            <option value="network">네트워크(NetworkManager)</option><option value="wifi">WiFi(hostapd)</option>
+            <option value="dhcp">DHCP(dnsmasq)</option><option value="dns">DNS(dnsproxy)</option>
+            <option value="firewall">방화벽(nftables)</option><option value="kernel">커널</option><option value="all">전체</option>
+          </select>
+          <select id="log-lines"><option>100</option><option selected>200</option><option>500</option></select>
+          <button id="log-load" class="ghost">불러오기</button>
+        </div>
+        <pre id="log-out" class="out hidden"></pre>
       </div>
       <form id="pw-form" class="card form">
         <h2>관리자 비밀번호 변경</h2>

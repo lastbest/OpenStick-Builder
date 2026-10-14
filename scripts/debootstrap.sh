@@ -55,7 +55,7 @@ cp configs/sysctl.d/*.conf ${CHROOT}/etc/sysctl.d/
 # web admin page (admin/), enabled by setup.sh when present
 if [ "${WITH_ADMIN}" = "1" ]; then
     install -d ${CHROOT}/opt/openstick-admin/www ${CHROOT}/etc/openstick-admin
-    install -m 0644 admin/server.py admin/backend.py admin/sms.py ${CHROOT}/opt/openstick-admin/
+    install -m 0644 admin/server.py admin/backend.py admin/sms.py admin/netctl.py admin/systools.py ${CHROOT}/opt/openstick-admin/
     install -m 0644 admin/www/* ${CHROOT}/opt/openstick-admin/www/
     chmod 0700 ${CHROOT}/etc/openstick-admin
     install -m 0644 admin/openstick-admin.service ${CHROOT}/etc/systemd/system/

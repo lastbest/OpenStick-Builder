@@ -277,6 +277,19 @@ class Handler(BaseHTTPRequestHandler):
                 ("POST", "/api/messages/delete"): lambda: be.messages_delete(self._read_json()),
                 ("POST", "/api/messages/read"): lambda: be.messages_read(self._read_json()),
                 ("POST", "/api/messages/retry"): lambda: be.messages_retry(self._read_json()),
+                ("GET", "/api/usage"): be.usage_get,
+                ("POST", "/api/usage"): lambda: be.usage_set(self._read_json()),
+                ("POST", "/api/usage/reset"): be.usage_reset,
+                ("POST", "/api/clients/block"): lambda: be.client_block(self._read_json(), self.client_address[0]),
+                ("POST", "/api/clients/unblock"): lambda: be.client_unblock(self._read_json()),
+                ("GET", "/api/system"): be.system_get,
+                ("POST", "/api/system/leds"): lambda: be.leds_set(self._read_json()),
+                ("POST", "/api/system/timezone"): lambda: be.timezone_set(self._read_json()),
+                ("POST", "/api/system/restart"): lambda: be.service_restart(self._read_json()),
+                ("GET", "/api/logs"): lambda: be.logs(q),
+                ("GET", "/api/dns"): be.dns_get,
+                ("POST", "/api/dns"): lambda: be.dns_set(self._read_json()),
+                ("POST", "/api/diag"): lambda: be.diag(self._read_json()),
             }
             fn = routes.get((method, path))
             if not fn:

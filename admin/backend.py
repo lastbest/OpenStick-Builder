@@ -10,7 +10,9 @@ import subprocess
 import threading
 import time
 
+import netctl
 import sms
+import systools
 
 LTE_CONN = "lte"                 # NetworkManager 연결 이름
 HOSTAPD_CONF = "/etc/hostapd/hostapd.conf"
@@ -60,6 +62,9 @@ class Backend:
     def __init__(self):
         # 문자: 수신 수집기(백그라운드 스레드) + sqlite 보관
         self.msgs = sms.Messages()
+        self.settings = netctl.Settings("/var/lib/openstick-admin/settings.json")
+        self.net = netctl.NetCtl(self.settings)            # 데이터 사용량, 기기 차단 (nft inet osa)
+        self.sys = systools.SysTools(self.settings, wan_connected=self._wan_up)
         # 신호 상세값(RSRP 등)은 주기 설정을 해야 갱신됨
         try:
             run(["mmcli", "-m", "any", "--signal-setup=10"], timeout=10, check=False)
@@ -99,6 +104,7 @@ class Backend:
             "clients": len(self.clients()["clients"]),
             "unread": self.msgs.unread(),
             "storage": self.msgs.storage(),
+            "usage": self._usage_summary(),
             "system": self._system(),
         }
 
@@ -187,6 +193,7 @@ class Backend:
         except Exception:  # noqa: BLE001
             pass
 
+        blocked = {b["mac"] for b in self.net.blocked()}
         result = []
         for mac in sorted(set(leases) | set(wifi) | {m for m, n in neigh.items() if n["state"] in ("REACHABLE", "DELAY", "PROBE")}):
             l, n, w = leases.get(mac, {}), neigh.get(mac, {}), wifi.get(mac)
@@ -197,11 +204,13 @@ class Backend:
             via = "WiFi" if (w is not None or dev == WLAN_IF) else "USB" if dev.startswith("usb") else "-"
             result.append({
                 "mac": mac, "ip": l.get("ip") or n.get("ip"), "name": l.get("name"),
-                "via": via,
+                "via": via, "blocked": mac in blocked,
                 "connected_sec": int(w["connected_time"]) if w and w.get("connected_time", "").isdigit() else None,
                 "signal_dbm": _num(w.get("signal")) if w else None,
             })
-        return {"clients": result}
+        online = {c["mac"] for c in result}
+        offline_blocked = [b for b in self.net.blocked() if b["mac"] not in online]
+        return {"clients": result, "blocked_offline": offline_blocked}
 
     # ================= WiFi =================
     WIFI_KEYS = ("ssid", "wpa_passphrase", "channel", "ignore_broadcast_ssid", "max_num_sta", "ap_isolate", "wpa_key_mgmt")
@@ -426,3 +435,69 @@ class Backend:
 
     def messages_media(self, msg_id, part):
         return self.msgs.media(msg_id, part)
+
+    # ================= 데이터 사용량 / 기기 차단 =================
+    def _wan_up(self):
+        try:
+            out = json.loads(run(["ip", "-j", "-4", "addr", "show", "dev", "wwan0"], timeout=5, check=False) or "[]")
+            return any(i.get("addr_info") for i in out)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _usage_summary(self):
+        u = self.net.usage()
+        return {k: u[k] for k in ("today", "period", "cap_bytes", "percent", "warn_pct", "blocked_now")}
+
+    def usage_get(self):
+        return self.net.usage()
+
+    def usage_set(self, d):
+        return self.net.set_usage(d)
+
+    def usage_reset(self):
+        return self.net.reset_usage()
+
+    def client_block(self, d, requester_ip):
+        return self.net.block(d.get("mac"), d.get("name"), netctl.mac_of_ip(requester_ip))
+
+    def client_unblock(self, d):
+        return self.net.unblock(d.get("mac"))
+
+    # ================= 시스템 도구 =================
+    def leds_set(self, d):
+        return self.sys.set_leds(d.get("mode"))
+
+    def system_get(self):
+        return {"leds": self.settings.get("leds", "on"), "time": self.sys.time_info(), **self.sys.services()}
+
+    def timezone_set(self, d):
+        return self.sys.set_timezone(d.get("timezone"))
+
+    def logs(self, q):
+        return self.sys.logs(q.get("unit", "admin"), q.get("lines", 200))
+
+    def service_restart(self, d):
+        return self.sys.restart(d.get("name"))
+
+    def dns_get(self):
+        return self.sys.dns_get()
+
+    def dns_set(self, d):
+        carrier = []
+        if d.get("preset") == "carrier":
+            g = mmcli_json("-m", "any").get("modem", {}).get("generic", {})
+            b = self._active_bearer(g.get("bearers") or [])
+            carrier = (b or {}).get("dns") or []
+        return self.sys.dns_set(d.get("preset"), carrier)
+
+    def diag(self, d):
+        kind = d.get("kind")
+        if kind == "ping":
+            return self.sys.ping(d.get("host"))
+        if kind == "lookup":
+            return self.sys.lookup(d.get("host"))
+        if kind == "traceroute":
+            return self.sys.traceroute(d.get("host"))
+        if kind == "speedtest":
+            return self.sys.speedtest(d.get("mb", 10))
+        raise ValueError("없는 진단 종류")

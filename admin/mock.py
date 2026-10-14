@@ -19,6 +19,9 @@ class Backend:
                     "apn": "", "username": "", "ip_type": "ipv4v6"}
         self.rx, self.tx = 512_000_000, 48_000_000
         self.msgs = _MockMessages()
+        self.blocked = [{"mac": "02:00:00:00:00:09", "name": "old-tablet", "since": int(time.time()) - 86400}]
+        self.usage_cfg = {"cap_gb": 50, "reset_day": 1, "warn_pct": 80, "block": False}
+        self.sysd = {"leds": "on", "tz": "Asia/Seoul", "dns": "adguard"}
 
     def _bearer(self):
         if not self.wan["data_enabled"]:
@@ -44,17 +47,25 @@ class Backend:
             "clients": len(self.clients()["clients"]),
             "unread": self.msgs.unread(),
             "storage": self.msgs.storage(),
+            "usage": {k: v for k, v in self.usage_get().items() if k in ("today", "period", "cap_bytes", "percent", "warn_pct", "blocked_now")},
             "system": {"uptime": int(time.time() - _start) + 3600, "load": ["0.12", "0.20", "0.18"],
                        "mem_total_kb": 382964, "mem_avail_kb": 256860, "temp_c": 41.5},
         }
 
     def clients(self):
-        return {"clients": [
+        bl = {b["mac"] for b in self.blocked}
+        cl = self._clients()
+        for c in cl:
+            c["blocked"] = c["mac"] in bl
+        return {"clients": cl, "blocked_offline": [b for b in self.blocked if b["mac"] not in {c["mac"] for c in cl}]}
+
+    def _clients(self):
+        return [
             {"mac": "02:00:00:00:00:01", "ip": "192.168.100.39", "name": "iPhone", "via": "WiFi",
              "connected_sec": 1843, "signal_dbm": -48.0},
             {"mac": "02:00:00:00:00:02", "ip": "192.168.100.71", "name": "MacBook-Air", "via": "USB",
              "connected_sec": None, "signal_dbm": None},
-        ]}
+        ]
 
     def wifi_get(self):
         w = dict(self.wifi)
@@ -124,6 +135,94 @@ class Backend:
     def messages_media(self, msg_id, part):
         return self.msgs.media(msg_id, part)
 
+
+    # 데이터 사용량 / 차단
+    def usage_get(self):
+        import datetime as dt
+        today = dt.date.today()
+        days = [{"day": (today - dt.timedelta(days=i)).isoformat(), "rx": random.randint(1, 900) * 2**20,
+                 "tx": random.randint(1, 90) * 2**20} for i in range(14, -1, -1)]
+        start = today.replace(day=self.usage_cfg["reset_day"]) if today.day >= self.usage_cfg["reset_day"] else today.replace(day=1)
+        per = [d for d in days if d["day"] >= start.isoformat()]
+        used = sum(d["rx"] + d["tx"] for d in per)
+        cap = int(self.usage_cfg["cap_gb"] * 2**30)
+        return {"today": {"rx": days[-1]["rx"], "tx": days[-1]["tx"]},
+                "period": {"start": start.isoformat(), "rx": sum(d["rx"] for d in per), "tx": sum(d["tx"] for d in per), "used": used},
+                "days": days, "cap_bytes": cap, "percent": round(used * 100 / cap, 1) if cap else None,
+                "warn_pct": self.usage_cfg["warn_pct"], "block_over_cap": self.usage_cfg["block"],
+                "blocked_now": False, "reset_day": self.usage_cfg["reset_day"], "error": None}
+
+    def usage_set(self, d):
+        for k in ("cap_gb", "reset_day", "warn_pct", "block"):
+            if k in d:
+                self.usage_cfg[k] = d[k]
+        return {"ok": True}
+
+    def usage_reset(self):
+        return {"ok": True}
+
+    def client_block(self, d, requester_ip):
+        if d.get("mac") == "02:00:00:00:00:02":
+            raise ValueError("지금 접속 중인 이 기기는 차단할 수 없습니다")
+        self.blocked = [b for b in self.blocked if b["mac"] != d.get("mac")] + [{"mac": d.get("mac"), "name": d.get("name"), "since": int(time.time())}]
+        return {"ok": True}
+
+    def client_unblock(self, d):
+        self.blocked = [b for b in self.blocked if b["mac"] != d.get("mac")]
+        return {"ok": True}
+
+    # 시스템 도구
+    def system_get(self):
+        return {"leds": self.sysd["leds"],
+                "time": {"timezone": self.sysd["tz"], "ntp_synced": True, "now": int(time.time()),
+                         "local": time.strftime("%Y-%m-%d %H:%M:%S")},
+                "services": [{"name": n, "state": "active", "can_restart": r, "warning": w} for n, r, w in (
+                    ("hostapd", True, "WiFi가 잠깐 끊깁니다"), ("dnsmasq", True, "DHCP/DNS가 잠깐 멈춥니다"),
+                    ("dnsproxy", True, "DNS가 잠깐 멈춥니다"), ("ModemManager", True, "LTE가 끊겼다가 다시 연결됩니다(수십 초)"),
+                    ("NetworkManager", True, "LTE·USB 네트워크가 잠깐 끊깁니다"), ("nftables", True, "방화벽/NAT 규칙을 다시 읽습니다"),
+                    ("openstick-admin", False, ""), ("msm8916-usb-gadget", False, ""))]}
+
+    def leds_set(self, d):
+        self.sysd["leds"] = d.get("mode")
+        return {"ok": True}
+
+    def timezone_set(self, d):
+        self.sysd["tz"] = d.get("timezone")
+        return self.system_get()["time"]
+
+    def service_restart(self, d):
+        time.sleep(0.5)
+        return {"ok": True, "state": "active"}
+
+    def logs(self, q):
+        return {"unit": q.get("unit", "admin"), "text": "\n".join(
+            f"2026-10-15T01:{i:02d}:00+0900 openstick {q.get('unit','admin')}[123]: 모의 로그 줄 {i}" for i in range(30))}
+
+    def dns_get(self):
+        return {"current": self.sysd["dns"], "state": "active", "presets": [
+            {"id": "adguard", "label": "AdGuard (광고·추적 차단, DoH/DoQ 암호화)"},
+            {"id": "cloudflare", "label": "Cloudflare (차단 없음, DoH 암호화)"},
+            {"id": "google", "label": "Google (차단 없음, DoH 암호화)"},
+            {"id": "carrier", "label": "통신사 DNS (차단·암호화 없음, 가장 가까움)"}]}
+
+    def dns_set(self, d):
+        time.sleep(1)
+        self.sysd["dns"] = d.get("preset")
+        return {"ok": True, "current": d.get("preset")}
+
+    def diag(self, d):
+        time.sleep(0.7)
+        k = d.get("kind")
+        if k == "ping":
+            return {"ok": True, "text": f"PING {d.get('host')}: 64 bytes time=38.2 ms\n4 packets transmitted, 4 received, 0% packet loss"}
+        if k == "lookup":
+            return {"name": d.get("host"), "server": "dnsmasq (192.168.100.1)", "A": ["93.184.215.14"], "AAAA": []}
+        if k == "traceroute":
+            return {"host": d.get("host"), "hops": [{"ttl": 1, "ip": "10.0.0.1", "ms": None}, {"ttl": 2, "ip": None, "ms": None},
+                                                     {"ttl": 3, "ip": "1.1.1.1", "ms": 41.3}]}
+        if k == "speedtest":
+            return {"mbps": 48.6, "seconds": 1.7, "bytes": int(d.get("mb", 10)) * 1_000_000}
+        raise ValueError("없는 진단 종류")
 
 def _png(w=96, h=64):
     rows = b"".join(b"\x00" + bytes(v for x in range(w) for v in (x * 255 // w, y * 255 // h, 180)) for y in range(h))

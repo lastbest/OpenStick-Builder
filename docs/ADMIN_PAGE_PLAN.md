@@ -97,5 +97,8 @@ Shared building blocks first:
 | B3 | Diagnostics, speed test | ping; DNS lookup in Python; traceroute package to be added | speed test uses metered LTE data → explicit size + confirm | S | do |
 | B4 | Settings backup/restore | tar of managed configs (password hash optional), validate before restore | bad restore → validation + revert | M | do |
 
-Order: shared helpers → A10 → A9a → A16/B5 → B1 → B3 → A6, then A11a → A12a → B2 → A14 → B4/A16b.
+Order: shared helpers → A10 → A9a → A16/B5 → B1 → B3, then A11a → A12a → B2 → A14 → B4/A16b.
+
+**Status (Oct 2026): P1-a done and verified on the device** — A10, A9a, A16/B5, B1, B3. A6 dropped (not needed).
+The apply-with-confirm helper is not needed by P1-a (DNS changes verify themselves) and moves to P1-b.
 Deferred: A9b, A11b, A12b, manual operator selection, i18n.
