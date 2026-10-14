@@ -22,7 +22,7 @@ Priorities: **P0** done in v0.1 · **P1** next · **P2** later · **P3** needs h
 | A6 | Internet | network mode (auto / LTE only), manual operator selection, MTU | P1 | mmcli --set-allowed-modes, --3gpp-scan |
 | A7 | WiFi | SSID, password, security, hidden SSID, channel, max clients, AP isolation | P0 ✅ | hostapd.conf |
 | A8 | Clients | list (name/IP/MAC/WiFi·USB/time) | P0 ✅ | dnsmasq leases, hostapd_cli, ip neigh |
-| A9 | Clients | per-device speed limit, block/unblock | P1 | nft, tc |
+| A9 | Clients | block/unblock (P1), per-device speed limit (approximate only, see D) | P1 | nft |
 | A10 | Data usage | daily/monthly stats, monthly cap and reset day, warn/block | P1 | own collector (no vnstat) |
 | A11 | LAN/DHCP | gateway IP/netmask, DHCP range/lease, static leases | P1 | dnsmasq, NM bridge |
 | A12 | Firewall | port forwarding, port filter, URL/IP allow/deny lists, DNS switch | P1 | nft, dnsmasq |
@@ -66,3 +66,36 @@ modem with it on some sticks), TTL spoofing.
 - Manual profiles can be added and the user can always go back to auto.
 - Saving reconnects LTE and waits for an IP; if that fails the previous settings are
   restored automatically, because LTE is the only uplink.
+
+## D. P1 design (checked on a JZ01-45-V33 stick, Oct 2026)
+Device facts that shape the design: the pmOS kernel has **no tc qdiscs** (no htb/tbf/ifb),
+so real per-client shaping is impossible — only nft `limit` policing (drops). nft
+counters/limit/conntrack, br_netfilter and WireGuard are available. `traceroute`, `dig`,
+miniupnpd and ddclient are not installed. Carrier IPs are CGNAT (10.x).
+
+Shared building blocks first:
+- **apply-with-confirm**: risky changes are reverted automatically unless confirmed in the
+  UI within 60 s (LAN IP, DNS, MAC filter, firewall);
+- **no self-lockout**: refuse block/filter rules that would cut off the requesting client;
+- a dedicated nft table `inet osa` for everything the admin page adds.
+
+| # | Feature | Design | Risk / limits | Effort | Decision |
+|---|---|---|---|---|---|
+| A10 | Data usage, monthly cap, warn/block | nft counters on wwan0 → daily rows in sqlite every 60 s; block = forward drop to wwan0 | a few % off the carrier's bill; includes the stick's own traffic | M | do first |
+| A9a | Block/unblock client | nft drop by MAC | randomized MACs (iOS private address) escape after a MAC change | S | do |
+| A9b | Per-client speed limit | nft `limit rate over` | no tc → coarse, bursty; label as approximate | M | later / approximate |
+| A6 | Network mode (auto / LTE only), operator scan | `mmcli --set-allowed-modes`, read-only `--3gpp-scan` | scan takes 1–3 min and may drop data; LTE-only can lose service; manual registration pointless on domestic SIMs (skipped) | S–M | do |
+| A11a | DHCP range/lease, static leases | dnsmasq `dhcp-range` / `dhcp-host` | low | S | do |
+| A11b | Change LAN IP/netmask | NM bridge + dnsmasq + nft + admin bind + hosts, with auto-revert | lock-out risk, rarely needed | L | defer |
+| A12a | Outbound IP/port filter, domain blocking | nft; dnsmasq `address=/domain/` (DNS already forced to dnsmasq) | clients using DoH bypass domain blocking | M | do |
+| A12b | Port forwarding, DMZ | nft dnat | useless behind CGNAT; only for public-IP plans | M | defer, explain in UI |
+| A14 | SIM PIN enable/change/disable | `mmcli -i --enable-pin/--change-pin/--disable-pin` | an enabled PIN locks the SIM on every boot (no data/SMS) → unlock screen + optional stored PIN for auto-unlock; refuse when 1 try is left | M | do, with guards |
+| A16 | LEDs, timezone, logs, service status, WiFi restart | sysfs leds (+persist), timedatectl, journalctl, systemctl | low | S | do |
+| A16b | Reset settings | restore managed configs to image defaults | must track the file list | M | with B4 |
+| B1 | Ad blocking on/off, upstream DNS | rewrite dnsproxy args, restart, verify resolution, revert on failure | DNS outage → auto-revert | S–M | do |
+| B2 | WiFi MAC allow/deny | hostapd `macaddr_acl` + files | allow-list missing the requester → refuse + revert | S | do |
+| B3 | Diagnostics, speed test | ping; DNS lookup in Python; traceroute package to be added | speed test uses metered LTE data → explicit size + confirm | S | do |
+| B4 | Settings backup/restore | tar of managed configs (password hash optional), validate before restore | bad restore → validation + revert | M | do |
+
+Order: shared helpers → A10 → A9a → A16/B5 → B1 → B3 → A6, then A11a → A12a → B2 → A14 → B4/A16b.
+Deferred: A9b, A11b, A12b, manual operator selection, i18n.
