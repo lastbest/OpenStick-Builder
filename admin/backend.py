@@ -222,7 +222,8 @@ class Backend:
             "security": "WPA2/WPA3" if "SAE" in cfg.get("wpa_key_mgmt", "") else "WPA2",
             "channel": int(cfg.get("channel", "6") or 6),
             "hidden": cfg.get("ignore_broadcast_ssid", "0") != "0",
-            "max_clients": int(cfg.get("max_num_sta", "0") or 0) or None,
+            # hostapd 기본값 2007 = 제한 없음 (저장 시에도 0 -> 2007로 씀)
+            "max_clients": (lambda n: None if n == 0 or n >= 2007 else n)(int(cfg.get("max_num_sta", "0") or 0)),
             "isolate": cfg.get("ap_isolate", "0") == "1",
             "running": run(["systemctl", "is-active", "hostapd"], check=False).strip() == "active",
         }
