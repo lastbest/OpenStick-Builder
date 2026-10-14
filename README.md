@@ -27,6 +27,27 @@ sudo ./build.sh
 git checkout ubuntu-24.04
 sudo ./build.sh
 ```
+#### Selecting the board
+lk1st (the lk2nd build used as `aboot`) cannot autodetect these dongles, so the
+board decides which button GPIO lk2nd watches and which kernel devicetree is put
+in `extlinux.conf`. Pass `BOARD=` to the build (default `uz801`):
+
+| `BOARD=` | Boards | lk2nd compatible | kernel DTB |
+| --- | --- | --- | --- |
+| `uz801` (default) | YiMing UZ801 v3 | `yiming,uz801-v3` | `msm8916-yiming-uz801v3` |
+| `jz01-45-v33` | JZ01-45-V33 "JZ" UFI dongles (e.g. UF902) | `openstick,jz01-45-v33` | `msm8916-jz01-45-v33` |
+| `ufi001c` | UFI-001B/C | `thwc,ufi001c` | `msm8916-thwc-ufi001c` |
+
+```shell
+sudo BOARD=jz01-45-v33 ./build.sh
+```
+> [!IMPORTANT]
+> Building a non-UZ801 board with the default `uz801` lk2nd makes lk2nd read the
+> wrong GPIO as a held button. On JZ01-45-V33 this sends every boot to
+> recovery/fastboot (`ERROR: No recovery partition found`), so Linux never starts.
+
+See [docs/UF902_JZ01_NOTES.md](docs/UF902_JZ01_NOTES.md) for the full UF902 / JZ01-45-V33 write-up.
+
 #### Detailed (same for any branch)
 - install dependencies
   ```shell
@@ -151,7 +172,7 @@ Edit [`scripts/setup.sh`](scripts/setup.sh) to add/remove packages. Note that th
   | username | user |
   | password | 1 |
  
-- If your device is not based on **UZ801**, modify `/boot/extlinux/extlinux.conf` to use the correct devicetree
+- If you built with the default `BOARD=uz801` but your device is not a **UZ801**, modify `/boot/extlinux/extlinux.conf` to use the correct devicetree (better: rebuild with the right `BOARD=`, see above)
   ```shell
   sed -i 's/yiming-uz801v3/<BOARD>/' /boot/extlinux/extlinux.conf
   ```
@@ -167,6 +188,7 @@ Edit [`scripts/setup.sh`](scripts/setup.sh) to add/remove packages. Note that th
 - Get the kernel link from: http://mirror.postmarketos.org/postmarketos/master/aarch64/
 
   ```shell
-  wget -O - http://mirror.postmarketos.org/postmarketos/master/aarch64/linux-postmarketos-qcom-msm8916-6.12.1-r2.apk \
+  wget -O - https://mirror.postmarketos.org/postmarketos/master/aarch64/linux-postmarketos-qcom-msm8916-6.12.1-r6.apk \
           | tar xkzf - -C / --exclude=.PKGINFO --exclude=.SIGN* 2>/dev/null
+  depmod -a 6.12.1-msm8916   # the package ships empty module indexes
   ```
