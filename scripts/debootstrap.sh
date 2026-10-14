@@ -3,6 +3,8 @@
 CHROOT=${CHROOT=$(pwd)/rootfs}
 RELEASE=${RELEASE=stable}
 HOST_NAME=${HOST_NAME=openstick}
+KERNEL_APK=${KERNEL_APK=linux-postmarketos-qcom-msm8916-6.12.1-r6.apk}
+. scripts/board.sh
 
 rm -rf ${CHROOT}
 
@@ -46,6 +48,8 @@ mkdir -p ${CHROOT}/etc/NetworkManager/conf.d
 cp configs/*.nmconnection ${CHROOT}/etc/NetworkManager/system-connections
 chmod 0600 ${CHROOT}/etc/NetworkManager/system-connections/*
 cp configs/99-custom.conf ${CHROOT}/etc/NetworkManager/conf.d/
+mkdir -p ${CHROOT}/etc/sysctl.d
+cp configs/sysctl.d/*.conf ${CHROOT}/etc/sysctl.d/
 
 # chroot setup
 cp configs/install_dnsproxy.sh ${CHROOT}
@@ -94,11 +98,24 @@ chmod +x ${CHROOT}/usr/sbin/wifi-ap.sh
 cp -a scripts/msm-firmware-loader.sh ${CHROOT}/usr/sbin
 
 # install kernel
-wget -O - http://mirror.postmarketos.org/postmarketos/master/aarch64/linux-postmarketos-qcom-msm8916-6.12.1-r2.apk \
+# (r2 was removed from the mirror; check APKINDEX for the current version and
+#  override with KERNEL_APK=... if this one disappears too)
+wget -O - https://mirror.postmarketos.org/postmarketos/master/aarch64/${KERNEL_APK} \
     | tar xkzf - -C ${CHROOT} --exclude=.PKGINFO --exclude=.SIGN* 2>/dev/null
 
+# The pmOS package ships an empty modules.alias and a modules.dep without
+# dependencies (postmarketOS regenerates them on install). Without this no
+# module is ever autoloaded: no USB gadget functions, no wcn36xx WiFi, no
+# nf_tables. Regenerate with the target's kmod, which understands .ko.zst.
+cp /usr/bin/qemu-aarch64-static ${CHROOT}/usr/bin/
+for kver in $(ls ${CHROOT}/usr/lib/modules); do
+    chroot ${CHROOT} qemu-aarch64-static /sbin/depmod -a ${kver}
+    test -s ${CHROOT}/usr/lib/modules/${kver}/modules.alias
+done
+rm -f ${CHROOT}/usr/bin/qemu-aarch64-static
+
 mkdir -p ${CHROOT}/boot/extlinux
-cp configs/extlinux.conf ${CHROOT}/boot/extlinux
+sed "s/msm8916-yiming-uz801v3/${BOARD_DTB}/" configs/extlinux.conf > ${CHROOT}/boot/extlinux/extlinux.conf
 
 # copy custom dtb's
 cp dtbs/* ${CHROOT}/boot/dtbs/qcom/
