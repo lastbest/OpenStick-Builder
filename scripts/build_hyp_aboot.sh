@@ -6,7 +6,18 @@ make -j$(nproc) -C src/qhypstub CROSS_COMPILE=aarch64-linux-gnu-
 # inititalizing the mmc (maybe due to using old/recycled flash chips)
 echo 'DEFINES += USE_TARGET_HS200_CAPS=1' >> src/lk2nd/project/lk1st-msm8916.mk
 
-make -j$(nproc) -C src/lk2nd LK2ND_BUNDLE_DTB="msm8916-512mb-mtp.dtb" LK2ND_COMPATIBLE="yiming,uz801-v3" \
+# Board selection (see scripts/board.sh). lk1st has no way to autodetect these
+# dongles, so the lk2nd node (button GPIO + kernel DTB) must match the board.
+. scripts/board.sh
+
+# Add lk2nd nodes for boards that upstream lk2nd does not know yet (idempotent)
+for p in patches/lk2nd-*.patch; do
+    if git -C src/lk2nd apply --check "../../$p" 2>/dev/null; then
+        git -C src/lk2nd apply "../../$p"
+    fi
+done
+
+make -j$(nproc) -C src/lk2nd LK2ND_BUNDLE_DTB="msm8916-512mb-mtp.dtb" LK2ND_COMPATIBLE="${LK2ND_COMPATIBLE}" \
     TOOLCHAIN_PREFIX=arm-none-eabi- lk1st-msm8916
 
 # test sign

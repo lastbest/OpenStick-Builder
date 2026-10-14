@@ -1,0 +1,31 @@
+--- a/lk2nd/device/dts/msm8916/msm8916-512mb-mtp.dts
++++ b/lk2nd/device/dts/msm8916/msm8916-512mb-mtp.dts
+@@ -96,4 +96,28 @@
+ 			};
+ 		};
+ 	};
++
++	jz01-45-v33 {
++		model = "JZ01-45-V33 4G Modem Stick";
++		compatible = "openstick,jz01-45-v33";
++
++		/*
++		 * JZ01-45-V33 ("juzhen/JZ" UFI dongle, e.g. UF902).
++		 * Its button is GPIO37 active-high; using the uz801 node instead makes
++		 * lk2nd read GPIO23 (pulled low on this board) as a held key, so it
++		 * enters recovery/fastboot and never boots.
++		 *
++		 * Use this node with lk1st:
++		 * make ... LK2ND_BUNDLE_DTB="msm8916-512mb-mtp.dtb" LK2ND_COMPATIBLE="openstick,jz01-45-v33"
++		 */
++		lk2nd,dtb-files = "msm8916-jz01-45-v33";
++
++		gpio-keys {
++			compatible = "gpio-keys";
++			reset {
++				lk2nd,code = <KEY_HOME>;
++				gpios = <&tlmm 37 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
++			};
++		};
++	};
+ };
