@@ -261,7 +261,8 @@ async function loadSms(more = false) {
   const items = r.messages.map(renderMsg);
   if (more) list.append(...items); else list.replaceChildren(...items);
   if (!more && !items.length) list.append(el("li", "muted", "문자가 없습니다"));
-  smsOldest = r.messages.length ? r.messages[r.messages.length - 1].id : smsOldest;
+  const last = r.messages[r.messages.length - 1];
+  if (last) smsOldest = `${last.ts}:${last.id}`;
   $("#sms-more").classList.toggle("hidden", r.messages.length < 50);
   $("#sms-info").textContent = r.error ? `수집 오류: ${r.error}` :
     r.last_poll ? `마지막 확인 ${fmtTime(r.last_poll)} · 15초마다 자동 수신` : "";

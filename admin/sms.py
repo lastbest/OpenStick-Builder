@@ -348,7 +348,9 @@ CREATE TABLE IF NOT EXISTS messages (
   mms_url TEXT, mms_tid TEXT, mms_expiry INTEGER, retries INTEGER NOT NULL DEFAULT 0,
   error TEXT
 );
-CREATE INDEX IF NOT EXISTS messages_ts ON messages(ts);
+DROP INDEX IF EXISTS messages_ts;               -- v0.1 had (ts) only
+CREATE INDEX IF NOT EXISTS messages_ts_id ON messages(ts, id);
+CREATE INDEX IF NOT EXISTS messages_unread ON messages(direction, read);
 """
 
 
@@ -370,12 +372,19 @@ class Messages:
             threading.Thread(target=self._loop, name="sms-collector", daemon=True).start()
 
     # ----- public API
-    def list(self, limit=50, before_id=None):
+    def list(self, limit=50, before=None):
+        """Newest first. `before` is the cursor "ts:id" of the last row already shown.
+        Messages queued at the carrier can arrive late (older ts, newer id), so the
+        cursor must follow the sort order (ts, id), not the id alone."""
         limit = max(1, min(int(limit), 200))
         q, args = "SELECT * FROM messages", []
-        if before_id:
-            q += " WHERE id < ?"
-            args.append(int(before_id))
+        if before:
+            m = re.fullmatch(r"(\d+):(\d+)", str(before))
+            if not m:
+                raise ValueError("잘못된 커서")
+            ts, mid = int(m.group(1)), int(m.group(2))
+            q += " WHERE ts < ? OR (ts = ? AND id < ?)"
+            args += [ts, ts, mid]
         q += " ORDER BY ts DESC, id DESC LIMIT ?"
         args.append(limit)
         with self.lock:
