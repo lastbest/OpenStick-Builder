@@ -107,10 +107,19 @@
     <!-- 문자 -->
     <section id="tab-sms" class="tab hidden">
       <form id="sms-form" class="card form">
-        <h2>문자 보내기</h2>
+        <h2>문자 보내기 <span id="sms-kind" class="tag hidden">MMS</span></h2>
         <label>받는 번호<input name="number" inputmode="tel" autocomplete="off" placeholder="01012345678" required></label>
-        <label>내용<textarea name="text" rows="3" maxlength="1000" required></textarea></label>
+        <label id="sms-subj-row" class="hidden">제목<input name="subject" maxlength="40" autocomplete="off" placeholder="(선택)"></label>
+        <label>내용<textarea name="text" rows="3" maxlength="4000"></textarea></label>
         <p class="muted small" id="sms-count">0자</p>
+        <div class="bulk">
+          <button type="button" id="sms-attach" class="ghost small">📎 사진·파일 첨부</button>
+          <button type="button" id="sms-subj-btn" class="ghost small">제목 넣기</button>
+          <span class="spacer"></span>
+          <span class="muted small" id="sms-attinfo"></span>
+        </div>
+        <input type="file" id="sms-files" multiple accept="image/*,video/*,audio/*,.pdf" hidden>
+        <ul id="sms-atts" class="atts"></ul>
         <button class="primary">보내기</button>
         <p class="result"></p>
       </form>

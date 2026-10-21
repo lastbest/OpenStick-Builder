@@ -23,6 +23,7 @@ WWW = os.path.join(os.path.dirname(os.path.abspath(__file__)), "www")
 SESSION_TTL = 30 * 60          # 마지막 요청 후 30분
 PBKDF2_ITER = 200_000
 MAX_BODY = 64 * 1024
+MAX_UPLOAD = 2 * 1024 * 1024     # MMS 첨부(base64)만 예외로 크게
 
 
 class Config:
@@ -166,10 +167,24 @@ class Handler(BaseHTTPRequestHandler):
         tok = self._cookie_token()
         return (tok, self.server.app["sessions"].get(tok)) if tok else (None, None)
 
-    def _read_json(self):
+    def _drain(self, n, cap=8 * 1024 * 1024):
+        """거부할 본문도 일단 읽어서 버린다. 다 읽기 전에 닫으면 브라우저는 413 대신
+        네트워크 오류를 보게 되고, 왜 거부됐는지 화면에 띄울 수 없다."""
+        left = min(n, cap)
+        while left > 0:
+            chunk = self.rfile.read(min(left, 65536))
+            if not chunk:
+                break
+            left -= len(chunk)
+        if n > cap:
+            self.close_connection = True
+
+    def _read_json(self, limit=MAX_BODY):
         n = int(self.headers.get("Content-Length") or 0)
-        if n > MAX_BODY:
-            raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "요청이 너무 큽니다")
+        if n > limit:
+            self._drain(n)
+            raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                           f"요청이 너무 큽니다 (최대 {limit >> 10}KB)")
         raw = self.rfile.read(n) if n else b"{}"
         try:
             data = json.loads(raw or b"{}")
@@ -274,6 +289,7 @@ class Handler(BaseHTTPRequestHandler):
                 ("POST", "/api/reboot"): be.reboot,
                 ("GET", "/api/messages"): lambda: be.messages_list(q),
                 ("POST", "/api/messages/send"): lambda: be.messages_send(self._read_json()),
+                ("POST", "/api/messages/send-mms"): lambda: be.messages_send_mms(self._read_json(MAX_UPLOAD)),
                 ("POST", "/api/messages/delete"): lambda: be.messages_delete(self._read_json()),
                 ("POST", "/api/messages/read"): lambda: be.messages_read(self._read_json()),
                 ("POST", "/api/messages/retry"): lambda: be.messages_retry(self._read_json()),

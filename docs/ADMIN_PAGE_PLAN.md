@@ -26,7 +26,7 @@ Priorities: **P0** done in v0.1 · **P1** next · **P2** later · **P3** needs h
 | A10 | Data usage | daily/monthly stats, monthly cap and reset day, warn/block | P1 | own collector (no vnstat) |
 | A11 | LAN/DHCP | gateway IP/netmask, DHCP range/lease, static leases | P1 | dnsmasq, NM bridge |
 | A12 | Firewall | port forwarding, port filter, URL/IP allow/deny lists, DNS switch | P1 | nft, dnsmasq |
-| A13 | SMS/MMS | inbox/outbox, send/reply/delete, MMS receive (text + pictures) ✅; contacts | P1 ✅ (contacts: P2) | mmcli --messaging, own MMS client |
+| A13 | SMS/MMS | inbox/outbox, send/reply/delete, MMS receive + send (text, pictures, files) ✅; contacts | P1 ✅ (contacts: P2) | mmcli --messaging, own MMS client |
 | A14 | SIM | PIN enable/change/disable, PIN/PUK retries | P1 | mmcli --sim |
 | A15 | USSD | request/response | P2 | mmcli --3gpp-ussd |
 | A16 | Device | info ✅, reboot ✅, factory reset of settings, LEDs off, time/timezone, logs, language | P0/P1 | sysfs leds, timedatectl, journalctl |

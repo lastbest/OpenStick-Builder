@@ -21,7 +21,7 @@ why it lives in this repository.
 | Internet | mobile data on/off, roaming, APN **auto/manual** (user/password/IP type) with **automatic rollback** if the new APN does not connect |
 | Clients | name / IP / MAC / WiFi or USB / signal / connected time |
 | Device | model, OS, kernel, IMEI, modem firmware, ICCID, IMSI; reboot |
-| Messages | SMS inbox/outbox, send and reply, **MMS** (long texts, pictures) downloaded automatically, unread badge, bulk/age delete, retry; attachments capped at 500 MB / 300 MB free (oldest pruned, text kept) |
+| Messages | SMS inbox/outbox, send and reply, **MMS send and receive** (pictures and files, long texts) - receive is automatic, send resizes pictures in the browser; unread badge, bulk/age delete, retry; attachments capped at 500 MB / 300 MB free (oldest pruned, text kept) |
 | Data usage | daily/period usage from nft counters on wwan0, monthly cap with reset day, warning, optional block of client internet when over cap |
 | Clients | block/unblock a client's internet by MAC (refuses to block the requesting client) |
 | Diagnostics | upstream DNS (AdGuard ad-blocking / Cloudflare / Google / carrier, verified + reverted on failure), ping, DNS lookup, traceroute, metered speed test |
@@ -42,7 +42,16 @@ Roadmap: [`../docs/ADMIN_PAGE_PLAN.md`](../docs/ADMIN_PAGE_PLAN.md).
   `d-mmsc.ktfwing.com:9083`, same APN as data). Text and images are stored; an
   `m-notifyresp-ind` is posted to the MMSC (best effort). No mmsd-tng needed.
   Korean carriers deliver long texts and pictures as MMS, so this matters there.
-- **Sending:** SMS only; ModemManager splits long texts into concatenated SMS.
+- **Sending.** Short texts go out as SMS through ModemManager (it splits long ones into
+  concatenated SMS). Anything with an attachment, a subject or over 1000 characters is sent
+  as MMS: `sms.py` builds an `m-send-req` (headers + SMIL + multipart/related) and POSTs it
+  to the MMSC on the same interface retrieval uses - the modem is not involved. The MMSC
+  answers with an `m-send-conf`; its response-status is what ends up in the row's error.
+  `From` carries the insert-address-token so the MMSC fills in our own number.
+  Attachments are capped at 1 MB in total, and the page resizes pictures to 1280 px / ~300 KB
+  before upload (the stick has no image library, so the browser does it).
+  Whether the carrier accepts an MMS from the stick at all is a property of the line:
+  data-only and MVNO SIMs often allow receive but refuse send (response-status 0x82).
 - Expired MMS (stick offline longer than the carrier keeps them) are shown as such.
 
 ## nftables

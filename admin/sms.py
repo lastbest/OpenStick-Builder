@@ -9,10 +9,14 @@ Flow
   * turns WAP-push MMS notifications into "mms" rows and downloads the message
     from the MMSC over the normal data connection (Korean carriers send long texts
     and pictures as MMS).
-- Sending: SMS only (ModemManager splits long texts into concatenated SMS).
+- Sending: SMS through ModemManager (it splits long texts into concatenated SMS),
+  MMS by POSTing an m-send-req to the MMSC over the same data connection the
+  retrieval uses.
 
 Only the Python standard library is used. MMS PDUs follow OMA MMS 1.x / WSP.
 """
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -29,6 +33,8 @@ UE_MODE = "csps-2"               # data centric, combined attach -> SMS over SGs
 UE_RETRY_SEC = 60
 MMS_MAX_BYTES = 3 * 1024 * 1024
 MMS_MAX_RETRIES = 6
+MMS_SEND_MAX_BYTES = 1024 * 1024        # attachments of one outgoing MMS; carriers cap lower
+MMS_SEND_TIMEOUT = 120
 MEDIA_CAP_BYTES = 500 * 1024 * 1024     # all MMS attachments together
 MIN_FREE_BYTES = 300 * 1024 * 1024      # keep this much free on the rootfs
 NUMBER_RE = re.compile(r"\+?[0-9]{3,20}")
@@ -255,6 +261,12 @@ def parse_mms_headers(r):
             h["subject"] = encoded_string(r)
         elif f == 0x0E:                         # Message-Size
             h["size"] = r.long_int()
+        elif f == 0x0B:                         # Message-ID (m-send-conf)
+            h["message_id"] = r.text().decode("latin-1")
+        elif f == 0x12:                         # X-Mms-Response-Status
+            h["response_status"] = r.byte()
+        elif f == 0x13:                         # X-Mms-Response-Text
+            h["response_text"] = encoded_string(r)
         elif f == 0x08:                         # Expiry
             vlen = r.value_length()
             end = r.p + vlen
@@ -284,7 +296,8 @@ def parse_multipart(r):
         while not sub.eof():                    # part headers: look for Content-Location
             b = sub.byte()
             if b == 0x8E:
-                name = name or decode_text(sub.text())
+                loc = decode_text(sub.text())   # always consume it: a part may carry both
+                name = name or loc              # a name parameter and a Content-Location
             elif b & 0x80:
                 sub.skip_value()
             else:
@@ -333,6 +346,183 @@ def build_notifyresp(tid):
     return bytes([0x8C, 0x83, 0x98]) + tid.encode("latin-1") + b"\x00" + bytes([0x8D, 0x92, 0x95, 0x81])
 
 
+# ---------------------------------------------------------------- WSP / MMS encoding
+WK_CONTENT_IDS = {v: k for k, v in WK_CONTENT_TYPES.items()}
+SMIL_CID = "smil"
+SEND_STATUS = {                                 # X-Mms-Response-Status of an m-send-conf
+    0x81: "알 수 없는 오류",
+    0x82: "서비스 거부 (회선에 MMS 발신이 막혀 있을 수 있습니다)",
+    0x83: "메시지 형식 오류",
+    0x84: "발신 번호를 확인할 수 없음",
+    0x85: "메시지를 찾을 수 없음",
+    0x86: "네트워크 오류",
+    0x87: "받는 번호 형식 오류",
+    0x88: "받는 번호를 확인할 수 없음",
+    0x89: "지원하지 않는 메시지",
+    0x8A: "메시지가 너무 큽니다",
+}
+
+
+class Writer:
+    """The write side of Reader: WSP primitives, same encoding rules."""
+
+    def __init__(self):
+        self.b = bytearray()
+
+    def byte(self, v):
+        self.b.append(v & 0xFF)
+        return self
+
+    def raw(self, data):
+        self.b += data
+        return self
+
+    def uintvar(self, n):
+        if n < 0:
+            raise PduError("negative uintvar")
+        out = bytearray([n & 0x7F])
+        n >>= 7
+        while n:
+            out.insert(0, (n & 0x7F) | 0x80)
+            n >>= 7
+        return self.raw(out)
+
+    def short(self, n):
+        if not 0 <= n <= 0x7F:
+            raise PduError("not a short-integer")
+        return self.byte(0x80 | n)
+
+    def long_int(self, n):
+        raw = n.to_bytes(max(1, (n.bit_length() + 7) // 8), "big")
+        return self.byte(len(raw)).raw(raw)
+
+    def integer(self, n):
+        return self.short(n) if n <= 0x7F else self.long_int(n)
+
+    def text(self, s):
+        raw = s.encode("utf-8") if isinstance(s, str) else s
+        if raw[:1] >= b"\x80":
+            self.byte(0x7F)                     # Quote: not a plain token any more
+        return self.raw(raw).byte(0)
+
+    def quoted(self, s):
+        return self.byte(0x22).raw(s.encode("utf-8")).byte(0)
+
+    def value_length(self, n):
+        return self.byte(n) if n <= 30 else self.byte(31).uintvar(n)
+
+    def data(self, payload):
+        return self.value_length(len(payload)).raw(payload)
+
+    def encoded_string(self, s):
+        """Charset-tagged text, so Korean subjects survive the trip."""
+        raw = s.encode("utf-8")
+        if raw.isascii():
+            return self.text(raw)
+        return self.data(bytes(Writer().integer(106).raw(raw).byte(0).b))
+
+
+def _ct_value(media, params=None):
+    """A content-type field value (header or multipart part header)."""
+    wk = WK_CONTENT_IDS.get(media.lower())
+    if not params:
+        return bytes(Writer().short(wk).b) if wk is not None else bytes(Writer().text(media).b)
+    inner = Writer()
+    if wk is not None:
+        inner.short(wk)
+    else:
+        inner.text(media)
+    for k, v in params.items():
+        if k == "charset":
+            inner.byte(0x81).integer(v)
+        elif k == "type":
+            inner.byte(0x89).text(v)
+        elif k == "start":
+            inner.byte(0x8A).text(v)
+        elif k == "name":
+            inner.byte(0x97).encoded_string(v)
+        else:
+            raise PduError(f"unsupported content-type parameter {k}")
+    return bytes(Writer().data(bytes(inner.b)).b)
+
+
+def _xml(s):
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def build_smil(parts):
+    """A minimal slide layout. Without it many handsets show an attachment list
+    instead of the picture, and some refuse the message outright."""
+    media = [p for p in parts if p["type"].startswith(("image/", "video/", "audio/"))]
+    txt = next((p for p in parts if p["type"] == "text/plain"), None)
+    slides = []
+    for i, p in enumerate(media or [None]):
+        tag = ""
+        if p is not None:
+            kind = "img" if p["type"].startswith("image/") else p["type"].split("/", 1)[0]
+            tag = f'<{kind} src="{_xml(p["name"])}" region="Image"/>'
+        if txt is not None and i == 0:
+            tag += f'<text src="{_xml(txt["name"])}" region="Text"/>'
+        slides.append(f'<par dur="8000ms">{tag}</par>')
+    return ('<smil><head><layout><root-layout width="320px" height="480px"/>'
+            '<region id="Image" top="0" left="0" width="100%" height="60%" fit="meet"/>'
+            '<region id="Text" top="60%" left="0" width="100%" height="40%"/>'
+            f'</layout></head><body>{"".join(slides)}</body></smil>').encode("utf-8")
+
+
+def build_multipart(parts):
+    """application/vnd.wap.multipart.related body: count, then per part
+    headers-length, data-length, headers, data."""
+    w = Writer().uintvar(len(parts))
+    for p in parts:
+        params = {}
+        if p.get("charset"):
+            params["charset"] = p["charset"]
+        if p.get("name"):
+            params["name"] = p["name"]
+        h = Writer().raw(_ct_value(p["type"], params))
+        if p.get("name"):
+            h.byte(0x8E).text(p["name"])            # Content-Location
+        if p.get("cid"):
+            h.byte(0xC0).quoted(f'<{p["cid"]}>')    # Content-ID, what `start` points at
+        head = bytes(h.b)
+        w.uintvar(len(head)).uintvar(len(p["data"])).raw(head).raw(p["data"])
+    return bytes(w.b)
+
+
+def build_send_req(tid, to, parts, subject=None):
+    """m-send-req. `parts` is [{type, name, data[, charset, cid]}], SMIL part first.
+
+    From carries the insert-address-token so the MMSC fills in our own number:
+    a handset is not meant to claim its MSISDN itself and carriers reject the
+    message when the claim does not match the SIM. Content-Type must be the last
+    header - everything after it is the body."""
+    w = Writer()
+    w.byte(0x8C).byte(0x80)                       # X-Mms-Message-Type: m-send-req
+    w.byte(0x98).text(tid)                        # Transaction-Id
+    w.byte(0x8D).byte(0x92)                       # MMS-Version: 1.2
+    w.byte(0x85).long_int(int(time.time()))       # Date
+    w.byte(0x89).data(b"\x81")                    # From: insert-address-token
+    for n in to:
+        w.byte(0x97).encoded_string(f"{n}/TYPE=PLMN")   # To
+    if subject:
+        w.byte(0x96).encoded_string(subject)
+    w.byte(0x8A).byte(0x80)                       # Message-Class: personal
+    w.byte(0x86).byte(0x81)                       # Delivery-Report: no
+    w.byte(0x90).byte(0x81)                       # Read-Reply: no
+    body = build_multipart(parts)
+    w.byte(0x84).raw(_ct_value("application/vnd.wap.multipart.related",
+                               {"type": "application/smil", "start": f"<{SMIL_CID}>"}))
+    return bytes(w.b) + body
+
+
+def parse_send_conf(data):
+    h = parse_mms_headers(Reader(data))
+    if h.get("type") != 0x81:                     # m-send-conf (0x81; 0x85 is m-acknowledge-ind)
+        raise PduError(f"unexpected MMS type {h.get('type')}")
+    return h
+
+
 # ---------------------------------------------------------------- store + collector
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -344,7 +534,7 @@ CREATE TABLE IF NOT EXISTS messages (
   kind TEXT NOT NULL,                -- sms | mms
   text TEXT,
   subject TEXT,
-  status TEXT NOT NULL,              -- received | sent | failed | pending | retrieved | expired | error
+  status TEXT NOT NULL,              -- received | sending | sent | failed | pending | retrieved | expired | error
   read INTEGER NOT NULL DEFAULT 0,
   parts TEXT,                        -- JSON [{type,name,file,size}]
   mms_url TEXT, mms_tid TEXT, mms_expiry INTEGER, retries INTEGER NOT NULL DEFAULT 0,
@@ -496,7 +686,9 @@ class Messages:
 
     def retry(self, msg_id):
         with self.lock:
-            self.db.execute("UPDATE messages SET status='pending', retries=0, error=NULL WHERE id=? AND kind='mms'", (int(msg_id),))
+            self.db.execute("UPDATE messages SET status='pending', retries=0, error=NULL"
+                            " WHERE id=? AND kind='mms' AND direction='in'",   # 보낸 MMS는 받아올 것이 없다
+                            (int(msg_id),))
             self.db.commit()
         threading.Thread(target=self._fetch_pending, daemon=True).start()
         return {"ok": True}
@@ -536,6 +728,107 @@ class Messages:
         if status != "sent":
             raise RuntimeError(f"발송 실패: {err}")
         return {"ok": True, "id": cur.lastrowid}
+
+    def send_mms(self, number, text="", subject=None, attachments=()):
+        """POST an m-send-req to the MMSC over wwan0 - the same path retrieval uses.
+
+        The modem is not involved: MMS travels over the data connection, the MMSC
+        answers with an m-send-conf and its response-status says whether the
+        carrier took the message."""
+        number = re.sub(r"[\s-]", "", str(number))
+        if not NUMBER_RE.fullmatch(number):
+            raise ValueError("전화번호 형식 오류")
+        if not self.mmsc_url:
+            raise ValueError("MMSC 주소가 설정되어 있지 않습니다")
+        text = str(text or "")
+        if len(text) > 4000:
+            raise ValueError("내용은 4000자 이하")
+        subject = str(subject).strip()[:120] if subject else None
+        atts = []
+        for a in attachments:
+            ctype = str(a.get("type") or "application/octet-stream").lower()
+            if not re.fullmatch(r"[\w.+-]+/[\w.+-]+", ctype):
+                raise ValueError("첨부 형식 오류")
+            atts.append({"type": ctype, "name": _safe_name(a.get("name")) or f"file{len(atts)}",
+                         "data": a["data"]})
+        if not text and not atts:
+            raise ValueError("내용이나 첨부가 필요합니다")
+        total = sum(len(a["data"]) for a in atts)
+        if total > MMS_SEND_MAX_BYTES:
+            raise ValueError(f"첨부는 합계 {MMS_SEND_MAX_BYTES >> 10}KB 이하 (현재 {total >> 10}KB)")
+
+        now = int(time.time())
+        with self.lock:
+            cur = self.db.execute(
+                "INSERT INTO messages(uid,direction,number,ts,kind,text,subject,status,read)"
+                " VALUES(?,?,?,?,?,?,?,'sending',1)",
+                (f"out-{now}-{os.urandom(4).hex()}", "out", number, now, "mms", text, subject))
+            self.db.commit()
+        msg_id = cur.lastrowid
+
+        if _free_bytes(self.dir) - total < MIN_FREE_BYTES // 2:
+            self.prune()
+        stored = []
+        for i, a in enumerate(atts):             # keep a copy so the thread shows what was sent
+            fname = f"{msg_id}-{i}"
+            with open(os.path.join(self.media_dir, fname), "wb") as f:
+                f.write(a["data"])
+            stored.append({"type": a["type"], "name": a["name"], "file": fname, "size": len(a["data"])})
+
+        parts = []
+        if text:
+            parts.append({"type": "text/plain", "name": "text.txt", "charset": 106,
+                          "data": text.encode("utf-8")})
+        used = {"text.txt", "smil.xml"}
+        for i, a in enumerate(atts):
+            wire = _wire_name(a["name"], i)
+            while wire in used:
+                wire = f"{i}-{wire}"
+            used.add(wire)
+            parts.append({"type": a["type"], "name": wire, "data": a["data"]})
+        smil = {"type": "application/smil", "name": "smil.xml", "cid": SMIL_CID,
+                "data": build_smil(parts)}
+        tid = os.urandom(6).hex()
+        pdu = build_send_req(tid, [number], [smil] + parts, subject=subject)
+
+        status, err, mid = "failed", None, None
+        try:
+            h = self._post_mms(pdu)
+            rs = h.get("response_status", 0x80)
+            if rs != 0x80:
+                raise RuntimeError(SEND_STATUS.get(rs, f"MMSC 거부 (0x{rs:02X})")
+                                   + (f" - {h['response_text']}" if h.get("response_text") else ""))
+            mid, status = h.get("message_id"), "sent"
+        except Exception as e:  # noqa: BLE001 - the row keeps the reason either way
+            err = str(e)[:300]
+        self._set(msg_id, status=status, parts=json.dumps(stored), error=err, mms_tid=tid)
+        if status != "sent":
+            raise RuntimeError(f"발송 실패: {err}")
+        return {"ok": True, "id": msg_id, "message_id": mid}
+
+    def _post_mms(self, pdu):
+        """Hand the m-send-req to the MMSC and return the m-send-conf headers.
+        Its own method so the mock backend can build a real PDU without a modem."""
+        fd, req = tempfile.mkstemp(dir=self.dir)
+        with os.fdopen(fd, "wb") as f:
+            f.write(pdu)
+        resp = req + ".resp"
+        try:
+            code = _run(["curl", "-s", "-m", str(MMS_SEND_TIMEOUT), "--interface", self.wan_if,
+                         "-H", "Content-Type: application/vnd.wap.mms-message",
+                         "-H", "Accept: application/vnd.wap.mms-message",
+                         "--data-binary", f"@{req}", "-o", resp, "-w", "%{http_code}",
+                         self.mmsc_url], timeout=MMS_SEND_TIMEOUT + 30, check=False).strip()
+            if code != "200":
+                raise RuntimeError(f"MMSC HTTP {code or '연결 실패'}")
+            with open(resp, "rb") as f:
+                return parse_send_conf(f.read())
+        finally:
+            for p in (req, resp):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
     # ----- collector
     def _loop(self):
@@ -695,3 +988,41 @@ def _safe_name(n):
     if not n:
         return None
     return re.sub(r"[^\w.\- ()\[\]가-힣]", "_", n)[:80]
+
+
+def _free_bytes(path):
+    try:
+        st = os.statvfs(path)
+        return st.f_bavail * st.f_frsize
+    except (AttributeError, OSError):          # 모의 모드로 돌리는 PC에는 statvfs가 없을 수 있다
+        return 1 << 62
+
+
+def decode_attachments(items):
+    """웹에서 온 MMS 첨부 [{name, type, data(base64)}] -> 바이트."""
+    if items is None:
+        return []
+    if not isinstance(items, list) or len(items) > 10:
+        raise ValueError("첨부는 최대 10개")
+    out = []
+    for a in items:
+        if not isinstance(a, dict) or not isinstance(a.get("data"), str):
+            raise ValueError("첨부 형식 오류")
+        try:
+            data = base64.b64decode(a["data"], validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("첨부 디코드 실패")
+        if not data:
+            raise ValueError("빈 첨부")
+        out.append({"name": a.get("name"), "type": a.get("type"), "data": data})
+    return out
+
+
+def _wire_name(name, i):
+    """Content-Location on the wire. The SMIL src and the Content-Location have to
+    match as strings, and handsets routinely drop a part whose name carries spaces
+    or Hangul, so anything but plain ASCII gets a generated name."""
+    if name and re.fullmatch(r"[A-Za-z0-9._-]{1,40}", name):
+        return name
+    ext = re.search(r"\.[A-Za-z0-9]{1,8}$", name or "")
+    return f"part{i}{ext.group(0).lower() if ext else ''}"

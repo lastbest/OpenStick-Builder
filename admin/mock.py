@@ -121,6 +121,10 @@ class Backend:
     def messages_send(self, d):
         return self.msgs.send(d.get("number", ""), d.get("text", ""))
 
+    def messages_send_mms(self, d):
+        return self.msgs.send_mms(d.get("number", ""), d.get("text", ""), d.get("subject"),
+                                  sms.decode_attachments(d.get("attachments")))
+
     def messages_delete(self, d):
         if d.get("older_than_days") is not None:
             return self.msgs.delete(older_than_days=d["older_than_days"])
@@ -263,3 +267,10 @@ class _MockMessages(sms.Messages):
             raise ValueError("내용은 1~1000자")
         time.sleep(0.8)
         return {"ok": True, "id": self._add("out", number, int(time.time()), "sms", text, "sent", 1)}
+
+    def _post_mms(self, pdu):
+        """검증·PDU 생성·보관은 진짜 코드를 그대로 쓰고(인코더 오류를 화면 개발 중에 잡는다),
+        MMSC로 보내는 것만 생략한다."""
+        print(f"mock: m-send-req {len(pdu)} bytes (전송 생략)", flush=True)
+        time.sleep(1.0)
+        return {"type": 0x81, "response_status": 0x80, "message_id": f"mock-{os.urandom(3).hex()}"}

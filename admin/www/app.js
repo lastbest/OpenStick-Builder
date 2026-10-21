@@ -207,9 +207,101 @@ function smsSegments(text) {
   const [one, many] = gsm ? [160, 153] : [70, 67];
   return { n, parts: n === 0 ? 0 : n <= one ? 1 : Math.ceil(n / many) };
 }
-$("#sms-form").text.addEventListener("input", (e) => {
-  const { n, parts } = smsSegments(e.target.value);
-  $("#sms-count").textContent = `${n}자 · SMS ${parts}건${parts > 1 ? " (나뉘어 발송, 건별 요금)" : ""}`;
+// ---------- MMS 첨부 ----------
+const MMS_MAX = 1024 * 1024;     // 서버와 같은 한도(합계)
+const IMG_TARGET = 300 * 1024;   // 통신사가 대개 이 근처에서 자르므로 사진은 미리 줄여서 보냄
+const IMG_MAX_PX = 1280;
+let atts = [];
+
+const b64 = (buf) => {
+  const b = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+
+// 기기에는 이미지 라이브러리가 없으므로 축소는 브라우저에서 한다.
+async function shrink(file) {
+  if (!file.type.startsWith("image/") || file.type === "image/gif") return file;
+  const bmp = await createImageBitmap(file).catch(() => null);
+  if (!bmp) return file;
+  const scale = Math.min(1, IMG_MAX_PX / Math.max(bmp.width, bmp.height));
+  if (scale === 1 && file.size <= IMG_TARGET) return file;
+  const c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * scale);
+  c.height = Math.round(bmp.height * scale);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close();
+  for (const q of [0.8, 0.6, 0.45]) {
+    const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", q));
+    if (!blob) break;
+    if (blob.size <= IMG_TARGET || q === 0.45) {
+      return new File([blob], file.name.replace(/\.[^.]*$/, "") + ".jpg", { type: "image/jpeg" });
+    }
+  }
+  return file;
+}
+
+function mmsMode() {
+  return atts.length > 0 || !!$("#sms-form").subject.value.trim() || smsSegments($("#sms-form").text.value).n > 1000;
+}
+
+function syncSms() {
+  const f = $("#sms-form");
+  const { n, parts } = smsSegments(f.text.value);
+  const mms = mmsMode();
+  $("#sms-kind").classList.toggle("hidden", !mms);
+  $("#sms-count").textContent = mms
+    ? `${n}자 · MMS 1건`
+    : `${n}자 · SMS ${parts}건${parts > 1 ? " (나뉘어 발송, 건별 요금)" : ""}`;
+  const total = atts.reduce((s, a) => s + a.size, 0);
+  $("#sms-attinfo").textContent = atts.length
+    ? `첨부 ${atts.length}개 · ${fmtBytes(total)}${total > IMG_TARGET ? " (통신사에서 거부될 수 있는 크기)" : ""}`
+    : "";
+  $("#sms-atts").replaceChildren(...atts.map((a, i) => {
+    const li = el("li");
+    if (a.type.startsWith("image/")) {
+      const img = el("img");
+      img.src = `data:${a.type};base64,${a.data}`;   // CSP가 blob:은 막고 data:는 허용한다
+      img.alt = "";
+      li.append(img);
+    } else {
+      li.append(el("span", "tag", a.type.split("/")[1] || "파일"));
+    }
+    li.append(el("span", "nm", a.name), el("span", "sz", fmtBytes(a.size)));
+    const x = el("button", "ghost small", "✕");
+    x.type = "button";
+    x.addEventListener("click", () => { atts.splice(i, 1); syncSms(); });
+    li.append(x);
+    return li;
+  }));
+}
+
+$("#sms-form").text.addEventListener("input", syncSms);
+$("#sms-form").subject.addEventListener("input", syncSms);
+$("#sms-subj-btn").addEventListener("click", () => {
+  $("#sms-subj-row").classList.toggle("hidden");
+  if (!$("#sms-subj-row").classList.contains("hidden")) $("#sms-form").subject.focus();
+  else { $("#sms-form").subject.value = ""; syncSms(); }
+});
+$("#sms-attach").addEventListener("click", () => $("#sms-files").click());
+$("#sms-files").addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  await busy($("#sms-attach"), async () => {
+    for (const raw of files) {
+      if (atts.length >= 10) { toast("첨부는 최대 10개"); break; }
+      let file;
+      try { file = await shrink(raw); } catch { file = raw; }
+      const total = atts.reduce((s, a) => s + a.size, 0) + file.size;
+      if (total > MMS_MAX) { toast(`${file.name}: 합계 ${fmtBytes(MMS_MAX)}를 넘어 제외했습니다`); continue; }
+      atts.push({
+        name: file.name, type: file.type || "application/octet-stream", size: file.size,
+        data: b64(await file.arrayBuffer()),
+      });
+    }
+  });
+  syncSms();
 });
 
 const fmtTime = (ts) => {
@@ -217,7 +309,8 @@ const fmtTime = (ts) => {
   const hm = d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
   return d.toDateString() === now.toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
 };
-const STATUS = { pending: "MMS 받는 중", error: "MMS 받기 실패", expired: "MMS 기간 만료", failed: "발송 실패" };
+const STATUS = { pending: "MMS 받는 중", error: "MMS 받기 실패", expired: "MMS 기간 만료",
+                 sending: "보내는 중", failed: "발송 실패" };
 
 const fmtNum = (n) => (n || "").replace(/^\+82/, "0");
 
@@ -325,13 +418,26 @@ $("#sms-readall").addEventListener("click", () => api("/api/messages/read", {}).
 $("#sms-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const f = e.target;
+  const mms = mmsMode();
+  if (!mms && !f.text.value.trim()) { setResult(f, "내용을 입력하세요.", false); return; }
   const { parts } = smsSegments(f.text.value);
-  if (parts > 1 && !confirm(`긴 문자라 SMS ${parts}건으로 나뉘어 발송됩니다. 보낼까요?`)) return;
-  busy($("button", f), async () => {
+  if (!mms && parts > 1 && !confirm(`긴 문자라 SMS ${parts}건으로 나뉘어 발송됩니다. 보낼까요?`)) return;
+  busy($("button.primary", f), async () => {
     try {
-      await api("/api/messages/send", { number: f.number.value, text: f.text.value });
+      if (mms) {
+        await api("/api/messages/send-mms", {
+          number: f.number.value, text: f.text.value, subject: f.subject.value,
+          attachments: atts.map((a) => ({ name: a.name, type: a.type, data: a.data })),
+        });
+      } else {
+        await api("/api/messages/send", { number: f.number.value, text: f.text.value });
+      }
       setResult(f, "보냈습니다.", true);
-      f.text.value = ""; $("#sms-count").textContent = "0자";
+      f.text.value = "";
+      f.subject.value = "";
+      $("#sms-subj-row").classList.add("hidden");
+      atts = [];
+      syncSms();
       loadSms().catch(() => {});
     } catch (err) { setResult(f, err.message, false); }
   });

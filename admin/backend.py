@@ -419,6 +419,10 @@ class Backend:
     def messages_send(self, d):
         return self.msgs.send(d.get("number", ""), d.get("text", ""))
 
+    def messages_send_mms(self, d):
+        return self.msgs.send_mms(d.get("number", ""), d.get("text", ""), d.get("subject"),
+                                  sms.decode_attachments(d.get("attachments")))
+
     def messages_delete(self, d):
         if d.get("older_than_days") is not None:
             return self.msgs.delete(older_than_days=d["older_than_days"])
