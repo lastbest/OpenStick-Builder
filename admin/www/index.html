@@ -281,6 +281,19 @@
         </div>
         <pre id="log-out" class="out hidden"></pre>
       </div>
+      <form id="tg-form" class="card form">
+        <h2>문자 → 텔레그램 전달</h2>
+        <p class="muted small">문자를 받으면 텔레그램 봇으로 바로 보내줍니다. 봇은 <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>에서 만들고, 방 ID는 봇과의 대화나 그룹의 chat id를 넣으세요.</p>
+        <label class="check"><input type="checkbox" name="enabled"> 전달 사용</label>
+        <label>봇 토큰<input name="token" autocomplete="off" placeholder="123456789:ABCdef... (저장됨, 바꿀 때만 입력)"></label>
+        <label>방 ID<input name="chat_id" autocomplete="off" inputmode="text" placeholder="예: 123456789 또는 -1001234567890"></label>
+        <label class="check"><input type="checkbox" name="send_media"> 사진도 함께 전송(MMS)</label>
+        <div class="row">
+          <button class="primary">저장</button>
+          <button type="button" id="tg-test" class="ghost">테스트 전송</button>
+        </div>
+        <p class="result"></p>
+      </form>
       <form id="pw-form" class="card form">
         <h2>관리자 비밀번호 변경</h2>
         <label>현재 비밀번호<input name="old" type="password" autocomplete="current-password" required></label>

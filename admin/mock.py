@@ -22,6 +22,7 @@ class Backend:
         self.blocked = [{"mac": "02:00:00:00:00:09", "name": "old-tablet", "since": int(time.time()) - 86400}]
         self.usage_cfg = {"cap_gb": 50, "reset_day": 1, "warn_pct": 80, "block": False}
         self.sysd = {"leds": "on", "tz": "Asia/Seoul", "dns": "adguard"}
+        self.telegram = {"enabled": False, "chat_id": "", "token": "", "send_media": True}
 
     def _bearer(self):
         if not self.wan["data_enabled"]:
@@ -138,6 +139,30 @@ class Backend:
 
     def messages_media(self, msg_id, part):
         return self.msgs.media(msg_id, part)
+
+    def telegram_get(self):
+        t = self.telegram
+        return {"enabled": t["enabled"], "chat_id": t["chat_id"],
+                "has_token": bool(t["token"]), "send_media": t["send_media"]}
+
+    def telegram_set(self, d):
+        t = self.telegram
+        if "chat_id" in d:
+            t["chat_id"] = str(d.get("chat_id") or "").strip()
+        if d.get("token"):
+            t["token"] = str(d["token"]).strip()
+        if "send_media" in d:
+            t["send_media"] = bool(d["send_media"])
+        if d.get("enabled") and (not t["token"] or not t["chat_id"]):
+            raise ValueError("봇 토큰과 방 ID를 입력하세요")
+        t["enabled"] = bool(d.get("enabled"))
+        return self.telegram_get()
+
+    def telegram_test(self, d):
+        if not self.telegram["token"] or not self.telegram["chat_id"]:
+            raise ValueError("봇 토큰과 방 ID를 먼저 저장하세요")
+        time.sleep(0.5)
+        return {"ok": True}
 
 
     # 데이터 사용량 / 차단

@@ -51,6 +51,29 @@ def _read(path, default=None):
         return default
 
 
+def _tg_send(token, chat_id, text):
+    """Telegram sendMessage over the device's normal uplink. Returns (ok, error)."""
+    try:
+        out = run(["curl", "-s", "-m", "15", f"https://api.telegram.org/bot{token}/sendMessage",
+                   "-d", f"chat_id={chat_id}", "--data-urlencode", f"text={text}",
+                   "-w", "\n%{http_code}"], timeout=25, check=False)
+        code = out.rsplit("\n", 1)[-1].strip()
+        if code == "200":
+            return True, None
+        return False, f"HTTP {code or '연결 실패'}: {out[:160]}"
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)[:160]
+
+
+def _tg_send_photo(token, chat_id, path):
+    try:
+        run(["curl", "-s", "-m", "60", f"https://api.telegram.org/bot{token}/sendPhoto",
+             "-F", f"chat_id={chat_id}", "-F", f"photo=@{path}",
+             "-o", "/dev/null"], timeout=70, check=False)
+    except Exception:  # noqa: BLE001 - 사진 전송 실패는 본문 알림을 막지 않는다
+        pass
+
+
 def _num(x):
     try:
         return float(x)
@@ -63,6 +86,7 @@ class Backend:
         # 문자: 수신 수집기(백그라운드 스레드) + sqlite 보관
         self.msgs = sms.Messages()
         self.settings = netctl.Settings("/var/lib/openstick-admin/settings.json")
+        self.msgs.on_inbound = self._notify_telegram      # 수신 시 텔레그램 전달(설정 시)
         self.net = netctl.NetCtl(self.settings)            # 데이터 사용량, 기기 차단 (nft inet osa)
         self.sys = systools.SysTools(self.settings, wan_connected=self._wan_up)
         # 신호 상세값(RSRP 등)은 주기 설정을 해야 갱신됨
@@ -439,6 +463,82 @@ class Backend:
 
     def messages_media(self, msg_id, part):
         return self.msgs.media(msg_id, part)
+
+    # ================= 텔레그램 수신 알림 =================
+    def _tg_target(self):
+        """봇 토큰과 방 ID. 수신 전달 on/off와 무관하게 알림(발열 등)에 쓰인다."""
+        t = self.settings.get("telegram") or {}
+        if t.get("token") and t.get("chat_id"):
+            return t["token"], t["chat_id"]
+        return None
+
+    def telegram_get(self):
+        t = self.settings.get("telegram") or {}
+        return {"enabled": bool(t.get("enabled")), "chat_id": t.get("chat_id", ""),
+                "has_token": bool(t.get("token")), "send_media": t.get("send_media", True)}
+
+    def telegram_set(self, d):
+        t = dict(self.settings.get("telegram") or {})
+        if "chat_id" in d:
+            cid = str(d.get("chat_id") or "").strip()
+            if cid and not re.fullmatch(r"-?\d{1,20}|@[A-Za-z]\w{3,}", cid):
+                raise ValueError("방 ID 형식 오류 (숫자, 또는 @로 시작하는 채널명)")
+            t["chat_id"] = cid
+        tok = d.get("token")
+        if tok:                                 # 빈 값이면 기존 토큰 유지
+            tok = str(tok).strip()
+            if not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{30,}", tok):
+                raise ValueError("봇 토큰 형식 오류 (예: 123456789:ABCdef...)")
+            t["token"] = tok
+        if "send_media" in d:
+            t["send_media"] = bool(d["send_media"])
+        if d.get("enabled"):
+            if not t.get("token"):
+                raise ValueError("봇 토큰을 입력하세요")
+            if not t.get("chat_id"):
+                raise ValueError("방 ID를 입력하세요")
+        t["enabled"] = bool(d.get("enabled"))
+        self.settings.update(telegram=t)
+        return self.telegram_get()
+
+    def telegram_test(self, d):
+        t = self.settings.get("telegram") or {}
+        if not t.get("token") or not t.get("chat_id"):
+            raise ValueError("봇 토큰과 방 ID를 먼저 저장하세요")
+        ok, err = _tg_send(t["token"], t["chat_id"], "✅ OpenStick 연결 테스트입니다.")
+        if not ok:
+            raise ValueError(f"전송 실패: {err}")
+        return {"ok": True}
+
+    def _notify_telegram(self, msg):
+        """수신 메시지를 텔레그램으로 전달. 수집 스레드를 막지 않도록 별도 스레드에서."""
+        t = self.settings.get("telegram") or {}
+        if not t.get("enabled") or not t.get("token") or not t.get("chat_id"):
+            return
+        threading.Thread(target=self._do_notify, args=(dict(t), msg), daemon=True).start()
+
+    # ================= 발열 알림 =================
+    def _do_notify(self, t, msg):
+        kind = "MMS" if msg.get("kind") == "mms" else "SMS"
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(msg.get("ts") or time.time()))
+        num = (msg.get("number") or "(번호 없음)").replace("+82", "0")
+        lines = [f"\U0001F4E9 문자 수신 ({kind})", f"보낸번호: {num}", when]
+        if msg.get("subject"):
+            lines.append(f"제목: {msg['subject']}")
+        if msg.get("text"):
+            lines += ["", msg["text"]]
+        parts = msg.get("parts") or []
+        imgs = [p for p in parts if str(p.get("type", "")).startswith("image/")]
+        other = [p for p in parts if p not in imgs]
+        if other:
+            lines.append("")
+            lines += [f"📎 {p.get('name') or p.get('type')}" for p in other]
+        _tg_send(t["token"], t["chat_id"], "\n".join(lines))
+        if t.get("send_media", True):
+            for p in imgs:
+                path = os.path.join(self.msgs.media_dir, p["file"])
+                if os.path.exists(path):
+                    _tg_send_photo(t["token"], t["chat_id"], path)
 
     # ================= 데이터 사용량 / 기기 차단 =================
     def _wan_up(self):

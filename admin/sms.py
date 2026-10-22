@@ -561,6 +561,7 @@ class Messages:
             self.db.commit()
         self.lock = threading.Lock()
         self.wan_if, self.mmsc_url = wan_if, mmsc_url
+        self.on_inbound = None          # optional callback(msg dict) for a newly received message
         self.last_ue_try = 0
         self.last_poll = None
         self.last_error = None
@@ -903,13 +904,28 @@ class Messages:
                 row = dict(kind="sms", text=text or "", status="received")
             row.setdefault("number", number)
             with self.lock:
-                self.db.execute(
+                cur = self.db.execute(
                     "INSERT OR IGNORE INTO messages(uid,direction,number,ts,kind,text,subject,status,mms_url,mms_tid,mms_expiry)"
                     " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                     (uid, "in", _clean_number(row["number"]), ts, row["kind"], row.get("text"), row.get("subject"),
                      row["status"], row.get("mms_url"), row.get("mms_tid"), row.get("mms_expiry")))
                 self.db.commit()
+            # notify only for a plain SMS; an MMS is still "pending" here and is
+            # announced once its content is retrieved (see _fetch_one)
+            if cur.rowcount and row["kind"] == "sms":
+                self._fire({"kind": "sms", "number": _clean_number(row["number"]), "ts": ts,
+                            "text": row.get("text") or "", "subject": None, "parts": []})
         _run(["mmcli", "-m", "any", f"--messaging-delete-sms={path}"], check=False)
+
+    def _fire(self, msg):
+        """Hand a received message to the optional notifier, never breaking collection."""
+        cb = self.on_inbound
+        if not cb:
+            return
+        try:
+            cb(msg)
+        except Exception as e:  # noqa: BLE001
+            print(f"sms: inbound notify failed: {e}", flush=True)
 
     def _fetch_pending(self):
         with self.lock:
@@ -956,9 +972,12 @@ class Messages:
                 f.write(p["data"])
             stored.append({"type": p["type"], "name": _safe_name(p["name"]), "file": fname, "size": len(p["data"])})
         sender = h.get("from")
-        self._set(r["id"], status="retrieved", text="\n".join(t for t in texts if t), subject=h.get("subject"),
+        body = "\n".join(t for t in texts if t)
+        self._set(r["id"], status="retrieved", text=body, subject=h.get("subject"),
                   parts=json.dumps(stored), error=None, pruned=int(pruned),
                   **({"number": _clean_number(sender)} if sender else {}))
+        self._fire({"kind": "mms", "number": _clean_number(sender) if sender else r["number"],
+                    "ts": int(time.time()), "text": body, "subject": h.get("subject"), "parts": stored})
         if r["mms_tid"] and self.mmsc_url:             # best effort, tells the MMSC we have it
             fd, ack = tempfile.mkstemp(dir=self.dir)
             with os.fdopen(fd, "wb") as f:

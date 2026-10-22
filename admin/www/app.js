@@ -703,7 +703,45 @@ async function loadDevice() {
     ["IMEI", d.imei], ["모뎀 펌웨어", d.modem_firmware], ["SIM 통신사", d.sim_operator],
     ["ICCID", d.iccid], ["IMSI", d.imsi], ["관리 IP", d.lan_ip],
   ]);
+  loadTelegram().catch((e) => toast(e.message));
 }
+
+async function loadTelegram() {
+  const t = await api("/api/telegram");
+  const f = $("#tg-form");
+  f.enabled.checked = t.enabled;
+  f.chat_id.value = t.chat_id || "";
+  f.send_media.checked = t.send_media;
+  f.token.value = "";
+  f.token.placeholder = t.has_token ? "저장됨 — 바꿀 때만 입력" : "123456789:ABCdef...";
+}
+
+$("#tg-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const f = e.target;
+  busy($("button.primary", f), async () => {
+    try {
+      await api("/api/telegram", {
+        enabled: f.enabled.checked, chat_id: f.chat_id.value,
+        token: f.token.value, send_media: f.send_media.checked,
+      });
+      setResult(f, "저장했습니다.", true);
+      loadTelegram().catch(() => {});
+    } catch (err) { setResult(f, err.message, false); }
+  });
+});
+$("#tg-test").addEventListener("click", (e) => busy(e.target, async () => {
+  const f = $("#tg-form");
+  try {
+    await api("/api/telegram", {
+      enabled: f.enabled.checked, chat_id: f.chat_id.value,
+      token: f.token.value, send_media: f.send_media.checked,
+    });
+    f.token.value = "";
+    await api("/api/telegram/test", {});
+    setResult(f, "테스트 메시지를 보냈습니다. 텔레그램을 확인하세요.", true);
+  } catch (err) { setResult(f, err.message, false); }
+}));
 
 $("#pw-form").addEventListener("submit", (e) => {
   e.preventDefault();
