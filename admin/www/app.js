@@ -704,7 +704,33 @@ async function loadDevice() {
     ["ICCID", d.iccid], ["IMSI", d.imsi], ["관리 IP", d.lan_ip],
   ]);
   loadTelegram().catch((e) => toast(e.message));
+  loadThermal().catch((e) => toast(e.message));
 }
+
+async function loadThermal() {
+  const t = await api("/api/thermal");
+  const f = $("#thermal-form");
+  f.enabled.checked = t.enabled;
+  f.warn_c.value = t.warn_c;
+  const now = $("#thermal-now");
+  now.textContent = t.current_c != null ? `현재 ${Math.round(t.current_c)}°C` : "-";
+  now.className = "tag" + (t.current_c != null && t.current_c >= t.warn_c ? " err" : "");
+  $("#thermal-zones").textContent = Object.entries(t.zones || {})
+    .map(([k, v]) => `${k.replace(/-thermal$/, "")} ${Math.round(v)}°C`).join(" · ")
+    + (t.has_telegram ? "" : "  — 텔레그램 미설정");
+}
+
+$("#thermal-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const f = e.target;
+  busy($("button.primary", f), async () => {
+    try {
+      await api("/api/thermal", { enabled: f.enabled.checked, warn_c: +f.warn_c.value });
+      setResult(f, "저장했습니다.", true);
+      loadThermal().catch(() => {});
+    } catch (err) { setResult(f, err.message, false); }
+  });
+});
 
 async function loadTelegram() {
   const t = await api("/api/telegram");

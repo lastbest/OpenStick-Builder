@@ -294,6 +294,15 @@
         </div>
         <p class="result"></p>
       </form>
+      <form id="thermal-form" class="card form">
+        <h2>발열 알림 <span id="thermal-now" class="tag">-</span></h2>
+        <p class="muted small">온도가 설정값을 넘으면 텔레그램으로 경고를 보냅니다. 임계 온도(약 95°C)에 도달하면 기기가 자동으로 꺼지니, 그 전에 알 수 있습니다. (위 텔레그램 설정 필요)</p>
+        <label class="check"><input type="checkbox" name="enabled"> 발열 알림 사용</label>
+        <label>경고 온도 (°C) <span class="muted small">60~90</span><input name="warn_c" type="number" min="60" max="90" step="1" value="80"></label>
+        <p class="muted small" id="thermal-zones"></p>
+        <button class="primary">저장</button>
+        <p class="result"></p>
+      </form>
       <form id="pw-form" class="card form">
         <h2>관리자 비밀번호 변경</h2>
         <label>현재 비밀번호<input name="old" type="password" autocomplete="current-password" required></label>

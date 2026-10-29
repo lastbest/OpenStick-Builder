@@ -296,6 +296,8 @@ class Handler(BaseHTTPRequestHandler):
                 ("GET", "/api/telegram"): be.telegram_get,
                 ("POST", "/api/telegram"): lambda: be.telegram_set(self._read_json()),
                 ("POST", "/api/telegram/test"): lambda: be.telegram_test(self._read_json()),
+                ("GET", "/api/thermal"): be.thermal_get,
+                ("POST", "/api/thermal"): lambda: be.thermal_set(self._read_json()),
                 ("GET", "/api/usage"): be.usage_get,
                 ("POST", "/api/usage"): lambda: be.usage_set(self._read_json()),
                 ("POST", "/api/usage/reset"): be.usage_reset,

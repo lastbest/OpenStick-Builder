@@ -23,6 +23,7 @@ class Backend:
         self.usage_cfg = {"cap_gb": 50, "reset_day": 1, "warn_pct": 80, "block": False}
         self.sysd = {"leds": "on", "tz": "Asia/Seoul", "dns": "adguard"}
         self.telegram = {"enabled": False, "chat_id": "", "token": "", "send_media": True}
+        self.thermal = {"enabled": False, "warn_c": 80}
 
     def _bearer(self):
         if not self.wan["data_enabled"]:
@@ -163,6 +164,24 @@ class Backend:
             raise ValueError("봇 토큰과 방 ID를 먼저 저장하세요")
         time.sleep(0.5)
         return {"ok": True}
+
+    def thermal_get(self):
+        zones = {"modem-thermal": 61 + random.randint(-2, 6), "gpu-thermal": 58 + random.randint(-2, 8),
+                 "cpu0-1-thermal": 60 + random.randint(-2, 5)}
+        return {"enabled": self.thermal["enabled"], "warn_c": self.thermal["warn_c"],
+                "current_c": max(zones.values()), "zones": zones, "crit_c": 95,
+                "has_telegram": bool(self.telegram["token"] and self.telegram["chat_id"])}
+
+    def thermal_set(self, d):
+        if "warn_c" in d:
+            w = int(d["warn_c"])
+            if not 60 <= w <= 90:
+                raise ValueError("경고 온도는 60~90°C 사이")
+            self.thermal["warn_c"] = w
+        if d.get("enabled") and not (self.telegram["token"] and self.telegram["chat_id"]):
+            raise ValueError("먼저 텔레그램 봇 토큰과 방 ID를 저장하세요")
+        self.thermal["enabled"] = bool(d.get("enabled"))
+        return self.thermal_get()
 
 
     # 데이터 사용량 / 차단

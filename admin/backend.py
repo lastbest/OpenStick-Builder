@@ -19,6 +19,10 @@ HOSTAPD_CONF = "/etc/hostapd/hostapd.conf"
 LEASES = "/var/lib/misc/dnsmasq.leases"
 WLAN_IF = "wlan0"
 LAN_BRIDGE = "br0"
+THERMAL_POLL = 30               # 발열 모니터 주기(초)
+THERMAL_WARN_DEFAULT = 80       # 기본 경고 온도(°C); 임계 95°C 전에 알린다
+THERMAL_CRIT = 95               # 하드웨어 보호 셧다운 온도(°C)
+THERMAL_HYST = 6                # 회복 알림 이력(경고 해제 폭, °C)
 
 _apn_lock = threading.Lock()
 _wifi_lock = threading.Lock()
@@ -87,6 +91,7 @@ class Backend:
         self.msgs = sms.Messages()
         self.settings = netctl.Settings("/var/lib/openstick-admin/settings.json")
         self.msgs.on_inbound = self._notify_telegram      # 수신 시 텔레그램 전달(설정 시)
+        threading.Thread(target=self._thermal_loop, name="thermal", daemon=True).start()
         self.net = netctl.NetCtl(self.settings)            # 데이터 사용량, 기기 차단 (nft inet osa)
         self.sys = systools.SysTools(self.settings, wan_connected=self._wan_up)
         # 신호 상세값(RSRP 등)은 주기 설정을 해야 갱신됨
@@ -158,23 +163,28 @@ class Backend:
                 return info
         return None
 
-    def _system(self):
-        mem = {}
-        for line in (_read("/proc/meminfo", "") or "").splitlines():
-            k, _, v = line.partition(":")
-            mem[k] = int(v.split()[0]) if v.split() else 0
-        temps = []
+    def _temps(self):
+        """Per-zone temperatures in °C: {zone type: value}."""
+        out = {}
         base = "/sys/class/thermal"
         if os.path.isdir(base):
             for z in sorted(os.listdir(base)):
                 t = _num(_read(f"{base}/{z}/temp"))
                 if t:
-                    temps.append(t / 1000)
+                    out[_read(f"{base}/{z}/type") or z] = round(t / 1000, 1)
+        return out
+
+    def _system(self):
+        mem = {}
+        for line in (_read("/proc/meminfo", "") or "").splitlines():
+            k, _, v = line.partition(":")
+            mem[k] = int(v.split()[0]) if v.split() else 0
+        temps = self._temps()
         return {
             "uptime": int(float((_read("/proc/uptime", "0") or "0").split()[0])),
             "load": (_read("/proc/loadavg", "0 0 0") or "0").split()[:3],
             "mem_total_kb": mem.get("MemTotal"), "mem_avail_kb": mem.get("MemAvailable"),
-            "temp_c": max(temps) if temps else None,
+            "temp_c": max(temps.values()) if temps else None,
         }
 
     # ================= 접속 기기 =================
@@ -518,6 +528,53 @@ class Backend:
         threading.Thread(target=self._do_notify, args=(dict(t), msg), daemon=True).start()
 
     # ================= 발열 알림 =================
+    def thermal_get(self):
+        c = self.settings.get("thermal") or {}
+        temps = self._temps()
+        return {"enabled": bool(c.get("enabled")), "warn_c": c.get("warn_c", THERMAL_WARN_DEFAULT),
+                "current_c": max(temps.values()) if temps else None, "zones": temps,
+                "crit_c": THERMAL_CRIT, "has_telegram": self._tg_target() is not None}
+
+    def thermal_set(self, d):
+        c = dict(self.settings.get("thermal") or {})
+        if "warn_c" in d:
+            w = _num(d.get("warn_c"))
+            if w is None or not 60 <= w <= 90:
+                raise ValueError("경고 온도는 60~90°C 사이")
+            c["warn_c"] = int(w)
+        if d.get("enabled") and not self._tg_target():
+            raise ValueError("먼저 텔레그램 봇 토큰과 방 ID를 저장하세요")
+        c["enabled"] = bool(d.get("enabled"))
+        self.settings.update(thermal=c)
+        return self.thermal_get()
+
+    def _thermal_loop(self):
+        alerted = False
+        while True:
+            time.sleep(THERMAL_POLL)
+            try:
+                c = self.settings.get("thermal") or {}
+                tg = self._tg_target()
+                if not c.get("enabled") or not tg:
+                    alerted = False
+                    continue
+                temps = self._temps()
+                if not temps:
+                    continue
+                hot = c.get("warn_c", THERMAL_WARN_DEFAULT)
+                zone, mx = max(temps.items(), key=lambda kv: kv[1])
+                if not alerted and mx >= hot:
+                    alerted = True
+                    _tg_send(tg[0], tg[1],
+                             f"⚠️ 발열 경고: {mx:.0f}°C ({zone})\n"
+                             f"임계 {THERMAL_CRIT}°C에 도달하면 자동으로 전원이 꺼집니다. "
+                             f"통풍을 확인하세요.")
+                elif alerted and mx <= hot - THERMAL_HYST:
+                    alerted = False
+                    _tg_send(tg[0], tg[1], f"✅ 온도 정상 회복: {mx:.0f}°C")
+            except Exception as e:  # noqa: BLE001 - 모니터는 절대 죽지 않는다
+                print(f"thermal monitor: {e}", flush=True)
+
     def _do_notify(self, t, msg):
         kind = "MMS" if msg.get("kind") == "mms" else "SMS"
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(msg.get("ts") or time.time()))
